@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 import csv
+from datetime import timedelta
 import functools
 import json
 import logging
@@ -45,6 +46,12 @@ from .const import (
     MAX_GEMINI_CALLS_PER_MINUTE,
     STORAGE_DIR_NAME,
 )
+from .const import (
+    BACKUP_DOWNLOAD_URL_TTL_SECONDS,
+    MAX_AI_ENRICH_PER_IMPORT,
+    MAX_DECANT_MINUTES,
+    MAX_PAIRING_TEXT_CHARS,
+)
 from .database import WineDatabase, utc_now_iso
 from .scanner import (
     ClaudeScannerError,
@@ -63,6 +70,87 @@ from .scanner import (
 from .vivino import async_fetch_vivino_wine, async_lookup_vivino, build_wine_url
 
 _LOGGER = logging.getLogger(__name__)
+
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def csv_safe_cell(value: Any) -> Any:
+    """Neutralize spreadsheet formula injection (CWE-1236) in exported CSV cells."""
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + value
+    if isinstance(value, (list, tuple)):
+        return csv_safe_cell(", ".join(str(v) for v in value))
+    return value
+
+
+def _ensure_entity_read_permission(user: Any | None, entity_id: str) -> None:
+    """Raise PermissionError unless ``user`` may read ``entity_id`` (admins always may).
+
+    ``user=None`` means an internal/system caller (e.g. an automation running the service as
+    the system) and is allowed; user-initiated HTTP/WebSocket calls always pass their user.
+    """
+    if user is None or getattr(user, "is_admin", False):
+        return
+    permissions = getattr(user, "permissions", None)
+    allowed = False
+    if permissions is not None and hasattr(permissions, "check_entity"):
+        try:
+            from homeassistant.auth.permissions.const import POLICY_READ
+        except ImportError:  # pragma: no cover - outside Home Assistant
+            POLICY_READ = "read"
+        try:
+            allowed = bool(permissions.check_entity(entity_id, POLICY_READ))
+        except Exception:  # noqa: BLE001
+            allowed = False
+    if not allowed:
+        raise PermissionError(f"You do not have permission to read {entity_id}.")
+
+
+def _clean_pairing_text(value: Any) -> str:
+    return str(value if value is not None else "")[:MAX_PAIRING_TEXT_CHARS]
+
+
+def validate_sommelier_pairing(pairing: Any, in_stock_ids: set[int]) -> dict[str, Any]:
+    """Coerce/validate untrusted LLM pairing JSON before it reaches any client.
+
+    - ``wine_id`` must be an int that refers to a wine currently in stock (else ``None``).
+    - ``decant_minutes`` is clamped to an int in [0, MAX_DECANT_MINUTES].
+    - All text fields are forced to strings and truncated.
+    """
+    if not isinstance(pairing, dict):
+        pairing = {}
+    clean: dict[str, Any] = {
+        key: _clean_pairing_text(pairing.get(key))
+        for key in ("dish_name", "dish_analysis", "pairing_reasoning", "conversational_response")
+    }
+    recs_in = pairing.get("recommended_wines")
+    recs_out: list[dict[str, Any]] = []
+    if isinstance(recs_in, list):
+        for rec in recs_in[:5]:
+            if not isinstance(rec, dict):
+                continue
+            try:
+                wine_id: int | None = int(rec.get("wine_id"))
+            except (TypeError, ValueError):
+                wine_id = None
+            if wine_id is not None and wine_id not in in_stock_ids:
+                wine_id = None
+            try:
+                decant = int(float(rec.get("decant_minutes") or 0))
+            except (TypeError, ValueError):
+                decant = 0
+            recs_out.append(
+                {
+                    "wine_id": wine_id,
+                    "wine_title": _clean_pairing_text(rec.get("wine_title"))[:300],
+                    "match_type": _clean_pairing_text(rec.get("match_type"))[:60],
+                    "sommelier_notes": _clean_pairing_text(rec.get("sommelier_notes")),
+                    "serving_temp_c": _clean_pairing_text(rec.get("serving_temp_c"))[:40],
+                    "decant_minutes": max(0, min(MAX_DECANT_MINUTES, decant)),
+                }
+            )
+    clean["recommended_wines"] = recs_out
+    return clean
 
 
 class WineInventoryCoordinator:
@@ -122,19 +210,24 @@ class WineInventoryCoordinator:
         except OSError as err:
             _LOGGER.debug("Legacy storage migration skipped: %s", err)
 
-    def _check_gemini_rate_limit(self) -> None:
-        """Enforce a per-coordinator sliding-window rate limit on LLM API calls."""
+    def _check_gemini_rate_limit(self, cost: int = 1) -> None:
+        """Enforce a per-coordinator sliding-window rate limit on LLM API calls.
+
+        ``cost`` is the number of upstream LLM requests the operation performs, so multi-call
+        operations (e.g. a bottle scan = label extraction + Vivino judge) are counted honestly.
+        """
         now = time.monotonic()
         cutoff = now - GEMINI_RATE_WINDOW_SECONDS
         self._gemini_call_timestamps = [
             ts for ts in self._gemini_call_timestamps if ts > cutoff
         ]
-        if len(self._gemini_call_timestamps) >= MAX_GEMINI_CALLS_PER_MINUTE:
+        cost = max(1, int(cost))
+        if len(self._gemini_call_timestamps) + cost > MAX_GEMINI_CALLS_PER_MINUTE:
             provider_label = "Claude" if self.llm_provider == LLM_PROVIDER_CLAUDE else "Gemini"
             raise GeminiScannerError(
                 f"Rate limit exceeded: maximum {MAX_GEMINI_CALLS_PER_MINUTE} {provider_label} AI requests per minute. Please wait a moment and try again."
             )
-        self._gemini_call_timestamps.append(now)
+        self._gemini_call_timestamps.extend([now] * cost)
 
     @property
     def cellar_name(self) -> str:
@@ -286,12 +379,19 @@ class WineInventoryCoordinator:
         *,
         image_data: str | None = None,
         camera_entity_id: str | None = None,
+        user: Any | None = None,
     ) -> dict[str, Any]:
-        """Scan a bottle image with Gemini Flash-Lite, enrich via Vivino, and check duplicates."""
-        self._check_gemini_rate_limit()
+        """Scan a bottle image with Gemini Flash-Lite, enrich via Vivino, and check duplicates.
+
+        ``user`` is the calling Home Assistant user (when known). Camera/image entity snapshots
+        are only allowed for admins or users with read permission on that entity.
+        """
         if image_data:
+            self._check_gemini_rate_limit(cost=2)
             mime_type, raw_bytes = parse_image_data_uri(image_data)
         elif camera_entity_id:
+            _ensure_entity_read_permission(user, str(camera_entity_id))
+            self._check_gemini_rate_limit(cost=2)
             mime_type, raw_bytes = await self._async_resolve_camera_image(camera_entity_id)
         else:
             raise ValueError("Either 'image_data' or 'camera_entity_id' must be provided.")
@@ -785,7 +885,9 @@ class WineInventoryCoordinator:
                     )
                     writer.writeheader()
                     for w in wines:
-                        writer.writerow(w)
+                        writer.writerow(
+                            {key: csv_safe_cell(w.get(key)) for key in fieldnames}
+                        )
             return str(target), f"/api/homecave/download/export/{filename}"
 
         file_path, download_url = await self.hass.async_add_executor_job(_write_export)
@@ -808,9 +910,9 @@ class WineInventoryCoordinator:
         filename = res.get("filename")
         if filename:
             try:
-                res["download_url"] = await self.async_stage_backup_for_download(filename)
+                res["download_url"] = await self.async_get_backup_download_url(filename)
             except Exception:
-                pass
+                res["download_url"] = ""
         return res
 
     async def async_restore_backup(self, zip_source: Path | bytes | str) -> dict[str, Any]:
@@ -846,16 +948,33 @@ class WineInventoryCoordinator:
         await self.async_refresh()
         return res
 
-    async def async_stage_backup_for_download(self, filename: str) -> str:
-        """Stage a backup archive for public HTTP download under /local/homecave/backups/."""
-        from .backup import stage_backup_for_download
+    async def async_get_backup_download_url(self, filename: str) -> str:
+        """Return a short-lived signed URL for the admin-only backup download view.
+
+        Backups are never copied into the unauthenticated <config>/www/ folder. The returned
+        ``/api/homecave/download/backup/<file>?authSig=...`` path is signed with Home Assistant's
+        ``async_sign_path`` (5-minute expiry) and still enforces the admin check in the view.
+        """
+        from .backup import resolve_safe_storage_path
 
         config_dir = Path(getattr(self.hass.config, "config_dir", "."))
-        return await self.hass.async_add_executor_job(
-            stage_backup_for_download,
-            config_dir,
-            filename,
+        safe_path = await self.hass.async_add_executor_job(
+            resolve_safe_storage_path, config_dir, filename
         )
+        if not safe_path.is_file():
+            raise FileNotFoundError(f"Backup archive {safe_path.name} not found.")
+        path = f"/api/homecave/download/backup/{safe_path.name}"
+        try:
+            from homeassistant.components.http.auth import async_sign_path
+        except ImportError:  # pragma: no cover - only outside Home Assistant (unit tests)
+            return path
+        try:
+            return async_sign_path(
+                self.hass, path, timedelta(seconds=BACKUP_DOWNLOAD_URL_TTL_SECONDS)
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Could not sign backup download path: %s", err)
+            return path
 
     def get_import_progress(self) -> dict[str, Any]:
         """Return the current import and enrichment progress."""
@@ -902,7 +1021,12 @@ class WineInventoryCoordinator:
             model=self.active_llm_model,
             provider=self.llm_provider,
         )
-        pairing = result.get("pairing") or {}
+        in_stock_ids = {
+            int(w["id"])
+            for w in cellar_wines
+            if w.get("id") is not None and int(w.get("quantity") or 0) > 0
+        }
+        pairing = validate_sommelier_pairing(result.get("pairing") or {}, in_stock_ids)
         return {
             "status": "ok",
             "pairing": pairing,
@@ -1013,7 +1137,8 @@ class WineInventoryCoordinator:
             all_wines = await self.hass.async_add_executor_job(
                 functools.partial(self.db.list_wines, include_out_of_stock=True)
             )
-            targets = [w for w in all_wines if not w.get("research_notes")]
+            # Cost guard: never run unbounded LLM enrichment for one import
+            targets = [w for w in all_wines if not w.get("research_notes")][:MAX_AI_ENRICH_PER_IMPORT]
             total_targets = len(targets)
             if total_targets > 0:
                 self._import_progress = {
@@ -1102,7 +1227,8 @@ class WineInventoryCoordinator:
                 w for w in all_wines
                 if (w.get("quantity") or 0) <= 0 and (not w.get("research_notes") or not w.get("varietal"))
             ][:50]  # Cap tasted wines batch to preserve quota
-            targets = cellar_targets + tasted_targets
+            # Cost guard: never run unbounded LLM enrichment for one import
+            targets = (cellar_targets + tasted_targets)[:MAX_AI_ENRICH_PER_IMPORT]
             total_targets = len(targets)
 
             if total_targets > 0:

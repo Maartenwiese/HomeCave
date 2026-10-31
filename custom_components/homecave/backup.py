@@ -44,6 +44,44 @@ _LOGGER = logging.getLogger(__name__)
 SQLITE_MAGIC_HEADER = b"SQLite format 3\x00"
 ALLOWED_COVER_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
+# Security: cover images are only ever downloaded over HTTPS from Vivino's image CDN.
+# Anything else (other hosts, plain http, LAN / metadata addresses) is never fetched,
+# which prevents SSRF and publishing attacker-controlled files under /local/.
+ALLOWED_COVER_HOSTS = frozenset({"images.vivino.com"})
+MAX_COVER_DOWNLOADS_PER_IMPORT = 1000
+MAX_ZIP_MEMBERS = 5000
+
+# Tables a genuine HomeCave database may contain (plus SQLite internals).
+EXPECTED_DB_TABLES = frozenset({"wines", "inventory_additions", "consumption_history"})
+_SQLITE_INTERNAL_TABLES = frozenset({"sqlite_sequence", "sqlite_stat1", "sqlite_stat4"})
+# Columns that must only hold INTEGER/REAL/NULL values in a restored database.
+_NUMERIC_DB_COLUMNS: dict[str, tuple[str, ...]] = {
+    "wines": (
+        "id",
+        "vintage",
+        "alcohol_pct",
+        "bottle_size_ml",
+        "vivino_rating",
+        "vivino_ratings_count",
+        "vivino_price_estimate",
+        "vivino_wine_id",
+        "drink_from_year",
+        "drink_until_year",
+        "personal_rating",
+        "quantity",
+        "purchase_price",
+        "is_imported",
+    ),
+    "inventory_additions": (
+        "id",
+        "wine_id",
+        "quantity_added",
+        "quantity_remaining",
+        "purchase_price",
+    ),
+    "consumption_history": ("id", "wine_id", "batch_id", "delta", "personal_rating"),
+}
+
 
 def is_valid_image_bytes(data: bytes) -> bool:
     """Return True if raw bytes begin with a recognized JPEG, PNG, or WebP magic signature."""
@@ -56,6 +94,119 @@ def is_valid_image_bytes(data: bytes) -> bool:
     if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
         return True
     return False
+
+
+def image_extension_from_magic(data: bytes) -> str:
+    """Return the file extension matching validated image bytes ('' if not an image)."""
+    if not is_valid_image_bytes(data):
+        return ""
+    if data.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    return ".webp"
+
+
+def is_allowed_cover_url(url: str) -> bool:
+    """Return True only for https://images.vivino.com/... URLs on the default port."""
+    try:
+        parsed = urlparse(str(url or "").strip())
+        port = parsed.port
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    return (
+        parsed.scheme == "https"
+        and host in ALLOWED_COVER_HOSTS
+        and port in (None, 443)
+        and not parsed.username
+        and not parsed.password
+    )
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse HTTP redirects so an allowed host can never bounce us to an internal address."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+def check_zip_archive_limits(zf: zipfile.ZipFile) -> None:
+    """Reject Zip-Slip member paths, excessive member counts, and zip bombs."""
+    infos = zf.infolist()
+    if len(infos) > MAX_ZIP_MEMBERS:
+        raise ValueError(
+            f"Security error: ZIP archive contains too many entries (> {MAX_ZIP_MEMBERS})."
+        )
+    total_uncompressed = 0
+    for info in infos:
+        member_path = Path(info.filename)
+        if (
+            ".." in member_path.parts
+            or info.filename.startswith("/")
+            or info.filename.startswith("\\")
+        ):
+            raise ValueError(
+                f"Security error: unsafe member path in ZIP archive: {info.filename}"
+            )
+        if info.file_size < 0 or info.file_size > MAX_BACKUP_ARCHIVE_BYTES:
+            raise ValueError(
+                "Security error: archive member exceeds maximum allowed uncompressed size."
+            )
+        total_uncompressed += info.file_size
+        if total_uncompressed > MAX_BACKUP_ARCHIVE_BYTES:
+            raise ValueError(
+                "Security error: total uncompressed archive size exceeds 50 MB limit."
+            )
+
+
+def _validate_restored_schema(conn: sqlite3.Connection) -> None:
+    """Reject databases with triggers, views, unknown tables, or non-numeric numeric columns."""
+    objects = conn.execute("SELECT type, name FROM sqlite_master").fetchall()
+    for obj_type, name in objects:
+        if obj_type in ("trigger", "view"):
+            raise ValueError(
+                f"Security error: backup database contains a disallowed {obj_type} ('{name}')."
+            )
+        if obj_type == "table" and name not in EXPECTED_DB_TABLES | _SQLITE_INTERNAL_TABLES:
+            raise ValueError(
+                f"Security error: backup database contains an unexpected table ('{name}')."
+            )
+    present_tables = {name for obj_type, name in objects if obj_type == "table"}
+    if "wines" not in present_tables:
+        raise ValueError("Security error: backup database does not contain a 'wines' table.")
+    for table, columns in _NUMERIC_DB_COLUMNS.items():
+        if table not in present_tables:
+            continue
+        existing = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')}
+        for column in columns:
+            if column not in existing:
+                continue
+            # table/column names come from the hard-coded allowlist above, never user input
+            bad = conn.execute(
+                f'SELECT COUNT(*) FROM "{table}" '
+                f'WHERE typeof("{column}") NOT IN (\'integer\', \'real\', \'null\')'
+            ).fetchone()[0]
+            if bad:
+                raise ValueError(
+                    f"Security error: backup column {table}.{column} contains non-numeric values."
+                )
+
+
+def purge_public_backup_copies(config_dir: Path) -> int:
+    """Delete backup archives previously staged into the unauthenticated <config>/www/ folder."""
+    removed = 0
+    public_dir = config_dir / "www" / "homecave" / "backups"
+    try:
+        if public_dir.is_dir() and not public_dir.is_symlink():
+            for item in public_dir.iterdir():
+                if item.is_file() or item.is_symlink():
+                    item.unlink()
+                    removed += 1
+            public_dir.rmdir()
+    except OSError as err:
+        _LOGGER.debug("Could not purge public backup copies in %s: %s", public_dir, err)
+    return removed
 
 
 def _validate_sqlite_bytes(db_bytes: bytes, work_dir: Path) -> None:
@@ -78,6 +229,7 @@ def _validate_sqlite_bytes(db_bytes: bytes, work_dir: Path) -> None:
                 raise ValueError(
                     "Security error: SQLite database failed integrity check."
                 )
+            _validate_restored_schema(conn)
 
 
 def _migrate_legacy_public_files(config_dir: Path) -> None:
@@ -288,29 +440,21 @@ def restore_backup_archive(
     wines_count = 0
 
     with zip_obj:
-        # Zip-Slip and Zip-Bomb pre-flight inspection
-        total_uncompressed = 0
-        for info in zip_obj.infolist():
-            member_path = Path(info.filename)
-            if (
-                ".." in member_path.parts
-                or info.filename.startswith("/")
-                or info.filename.startswith("\\")
-            ):
-                raise ValueError(
-                    f"Security error: unsafe member path in ZIP archive: {info.filename}"
-                )
-            if info.file_size < 0 or info.file_size > MAX_BACKUP_ARCHIVE_BYTES:
-                raise ValueError(
-                    "Security error: archive member exceeds maximum allowed uncompressed size."
-                )
-            total_uncompressed += info.file_size
-            if total_uncompressed > MAX_BACKUP_ARCHIVE_BYTES:
-                raise ValueError(
-                    "Security error: total uncompressed archive size exceeds 50 MB limit."
-                )
+        # Zip-Slip, member-count, and Zip-Bomb pre-flight inspection
+        check_zip_archive_limits(zip_obj)
 
         namelist = zip_obj.namelist()
+
+        # Validate the database FIRST so a rejected backup never overwrites cover images
+        db_arcname = None
+        for name in namelist:
+            if Path(name).name in (DB_FILENAME, "wine_inventory.db"):
+                db_arcname = name
+                break
+        db_bytes: bytes | None = None
+        if db_arcname:
+            db_bytes = zip_obj.read(db_arcname)
+            _validate_sqlite_bytes(db_bytes, db_dir)
 
         # Restore cover image files (validated by extension and image magic header)
         for name in namelist:
@@ -332,17 +476,7 @@ def restore_backup_archive(
                 alt_dest.write_bytes(data)
                 restored_images += 1
 
-        # Check for DB_FILENAME
-        db_arcname = None
-        for name in namelist:
-            if Path(name).name in (DB_FILENAME, "wine_inventory.db"):
-                db_arcname = name
-                break
-
-        if db_arcname:
-            db_bytes = zip_obj.read(db_arcname)
-            _validate_sqlite_bytes(db_bytes, db_dir)
-
+        if db_bytes is not None:
             # Delete stale -wal and -shm files if present
             wal_file = target_db_path.with_name(f"{DB_FILENAME}-wal")
             shm_file = target_db_path.with_name(f"{DB_FILENAME}-shm")
@@ -556,34 +690,34 @@ def download_and_save_cover_image(
     image_url: str,
     timeout_sec: float = 6.0,
 ) -> str:
-    """Download cover image from a trusted URL (e.g. images.vivino.com) and save to <config>/www/homecave/covers/.
+    """Download a cover image from Vivino's image CDN and save it to <config>/www/homecave/covers/.
 
-    Returns the public /local/ URL on success, or the original image_url if download fails or cannot be saved.
+    Security model (SSRF / stored-file hardening):
+    - Only ``https://images.vivino.com/...`` is ever fetched; any other URL returns ``""``
+      without a network request, so it is neither downloaded nor published.
+    - Redirects are refused, and reads are bounded to MAX_IMAGE_UPLOAD_BYTES.
+    - Only bytes that pass JPEG/PNG/WebP magic-header validation are written (fail closed),
+      under a hashed filename whose extension is derived from the image bytes.
+
+    Returns the public /local/ URL on success; the original (allowed) URL if the download
+    failed; or ``""`` when the URL is not an allowed cover source.
     """
     if not image_url or not isinstance(image_url, str):
         return ""
     clean_url = image_url.strip()
-    if not clean_url.startswith(("https://", "http://")):
-        return clean_url
+    if not is_allowed_cover_url(clean_url):
+        return ""
 
     try:
-        parsed = urlparse(clean_url)
-        basename = Path(parsed.path).name
-        # Keep alphanumeric, dash, underscore, dot
-        safe_basename = re.sub(r"[^A-Za-z0-9_.-]", "_", basename)
-        if not safe_basename or safe_basename.startswith("."):
-            url_hash = hashlib.md5(clean_url.encode("utf-8")).hexdigest()[:16]
-            safe_basename = f"{url_hash}.jpg"
-
-        filename = f"vivino_{safe_basename}"
         covers_dir = config_dir / COVERS_SUBDIR
         covers_dir.mkdir(parents=True, exist_ok=True)
-        target_path = covers_dir / filename
-        local_url = f"/local/homecave/covers/{filename}"
+        url_digest = hashlib.sha256(clean_url.encode("utf-8")).hexdigest()[:24]
+        for existing_ext in (".jpg", ".png", ".webp"):
+            existing = covers_dir / f"vivino_{url_digest}{existing_ext}"
+            if existing.is_file() and existing.stat().st_size > 0:
+                return f"/local/homecave/covers/{existing.name}"
 
-        if target_path.exists() and target_path.stat().st_size > 0:
-            return local_url
-
+        opener = urllib.request.build_opener(_NoRedirectHandler)
         delays = [0, 3, 5]
         last_err: Exception | None = None
         for attempt_idx, delay in enumerate(delays, 1):
@@ -597,14 +731,19 @@ def download_and_save_cover_image(
                         "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
                     },
                 )
-                with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-                    data = resp.read()
-                    if data and is_valid_image_bytes(data):
-                        target_path.write_bytes(data)
-                        return local_url
-                    if data and len(data) <= MAX_IMAGE_UPLOAD_BYTES:
-                        target_path.write_bytes(data)
-                        return local_url
+                with opener.open(req, timeout=timeout_sec) as resp:
+                    status = getattr(resp, "status", 200)
+                    if status != 200:
+                        raise ValueError(f"unexpected HTTP status {status}")
+                    data = resp.read(MAX_IMAGE_UPLOAD_BYTES + 1)
+                ext = image_extension_from_magic(data)
+                if not ext:
+                    # Not a valid image (or too large): never write it. Retrying won't help.
+                    _LOGGER.debug("Rejected non-image cover response from %s", clean_url)
+                    return clean_url
+                filename = f"vivino_{url_digest}{ext}"
+                (covers_dir / filename).write_bytes(data)
+                return f"/local/homecave/covers/{filename}"
             except Exception as err:
                 last_err = err
                 _LOGGER.debug(
@@ -810,11 +949,13 @@ def import_vivino_full_wine_list_csv(
 
     downloaded_images = 0
     if download_images:
-        urls_to_download = {
-            w["image_url"]
-            for w in grouped_wines.values()
-            if w.get("image_url") and str(w["image_url"]).startswith(("http://", "https://"))
-        }
+        urls_to_download = sorted(
+            {
+                w["image_url"]
+                for w in grouped_wines.values()
+                if w.get("image_url") and is_allowed_cover_url(str(w["image_url"]))
+            }
+        )[:MAX_COVER_DOWNLOADS_PER_IMPORT]
         if urls_to_download:
             url_map = {}
             total_dl = len(urls_to_download)
@@ -1014,16 +1155,18 @@ def is_vivino_export_zip(
     """Return True if zip_source contains Vivino export CSVs (full_wine_list.csv or cellar.csv)."""
     try:
         if isinstance(zip_source, bytes):
+            if len(zip_source) > MAX_BACKUP_ARCHIVE_BYTES:
+                return False
             with zipfile.ZipFile(io.BytesIO(zip_source)) as zf:
                 return any(
                     n.lower().endswith(("full_wine_list.csv", "cellar.csv"))
                     for n in zf.namelist()
                 )
         if isinstance(zip_source, Path) and zip_source.is_file():
+            # Path objects are only constructed internally from already-sandboxed paths.
             safe_path = zip_source
-        elif isinstance(zip_source, str) and Path(zip_source).is_file() and Path(zip_source).is_absolute():
-            safe_path = Path(zip_source)
         else:
+            # User-supplied strings (absolute or relative) must stay inside HomeCave storage.
             base_dir = config_dir or Path(".")
             safe_path = resolve_safe_storage_path(base_dir, zip_source)
         if safe_path.exists() and safe_path.is_file():
@@ -1058,11 +1201,18 @@ def import_vivino_export_zip(
         })
 
     if isinstance(zip_source, bytes):
+        if len(zip_source) > MAX_BACKUP_ARCHIVE_BYTES:
+            raise ValueError(
+                "Security error: ZIP file exceeds maximum allowed size (50 MB)."
+            )
         zip_file: Any = io.BytesIO(zip_source)
     elif isinstance(zip_source, Path) and zip_source.is_file():
+        # Path objects are only constructed internally from already-sandboxed paths.
+        if zip_source.stat().st_size > MAX_BACKUP_ARCHIVE_BYTES:
+            raise ValueError(
+                "Security error: ZIP file exceeds maximum allowed size (50 MB)."
+            )
         zip_file = open(zip_source, "rb")
-    elif isinstance(zip_source, str) and Path(zip_source).is_file() and Path(zip_source).is_absolute():
-        zip_file = open(Path(zip_source), "rb")
     else:
         safe_path = resolve_safe_storage_path(config_dir, zip_source)
         if not safe_path.exists() or not safe_path.is_file():
@@ -1075,6 +1225,8 @@ def import_vivino_export_zip(
 
     try:
         with zipfile.ZipFile(zip_file, "r") as zf:
+            # Zip-Slip, member-count, and Zip-Bomb limits (same as backup restore)
+            check_zip_archive_limits(zf)
             full_wine_text = ""
             cellar_text = ""
 
@@ -1287,22 +1439,6 @@ def import_vivino_history_csv(db: WineDatabase, csv_text: str) -> dict[str, Any]
         "tasted_count": tasted_count,
         "imported_wines": imported_count,
     }
-
-
-def stage_backup_for_download(config_dir: Path, filename: str) -> str:
-    """Stage a backup .zip file into <config>/www/homecave/backups/ for direct HTTP download.
-
-    Returns the public Home Assistant URL path '/local/homecave/backups/<filename>'.
-    """
-    safe_path = resolve_safe_storage_path(config_dir, filename)
-    if not safe_path.exists() or not safe_path.is_file():
-        raise FileNotFoundError(f"Backup archive {filename} not found.")
-
-    www_backups_dir = config_dir / "www" / "homecave" / "backups"
-    www_backups_dir.mkdir(parents=True, exist_ok=True)
-    target_file = www_backups_dir / safe_path.name
-    shutil.copy2(safe_path, target_file)
-    return f"/local/homecave/backups/{safe_path.name}"
 
 
 def _import_wines_from_csv(

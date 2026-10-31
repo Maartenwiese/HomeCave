@@ -71,11 +71,15 @@ def _sanitize_vivino_url(url: Any) -> str:
 
 
 def _sanitize_image_url(url: Any) -> str:
-    """Allow only local /local/ or /api/ paths, HTTPS image URLs, or base64 image data URIs."""
+    """Allow only HomeCave cover paths, Vivino's image CDN, or base64 raster image data URIs.
+
+    Arbitrary external hosts are rejected so a stored image URL can never act as a tracking
+    pixel (or other third-party request) inside the Home Assistant origin.
+    """
     raw = str(url or "").strip()
-    if not raw or any(ch in raw for ch in ("\r", "\n", "\x00", "<", ">", '"', "'")):
+    if not raw or any(ch in raw for ch in ("\r", "\n", "\x00", "<", ">", '"', "'", "\\")):
         return ""
-    if raw.startswith(("/local/", "/api/")):
+    if raw.startswith(("/local/homecave/covers/", "/local/wine_inventory/covers/")):
         if ".." in raw or "//" in raw[1:]:
             return ""
         return raw
@@ -85,7 +89,7 @@ def _sanitize_image_url(url: Any) -> str:
         parsed = urlparse(raw)
     except ValueError:
         return ""
-    if parsed.scheme.lower() == "https" and parsed.hostname:
+    if parsed.scheme.lower() == "https" and (parsed.hostname or "").lower() == "images.vivino.com":
         return raw
     return ""
 
@@ -335,9 +339,17 @@ class WineDatabase:
         if batches is not None:
             for b in batches:
                 b["purchase_price"] = _opt_float(b.get("purchase_price"))
+                # Defense in depth: a crafted/restored DB must never yield non-numeric values here
+                for int_col in ("id", "wine_id", "quantity_added", "quantity_remaining"):
+                    b[int_col] = _opt_int(b.get(int_col)) or 0
         if timeline is not None:
             for h in timeline:
                 h["personal_rating"] = _opt_float(h.get("personal_rating"))
+                for int_col in ("id", "wine_id", "delta"):
+                    h[int_col] = _opt_int(h.get(int_col)) or 0
+                h["batch_id"] = _opt_int(h.get("batch_id"))
+        for int_col in ("id", "quantity", "bottle_size_ml"):
+            data[int_col] = _opt_int(data.get(int_col)) or 0
 
         data["drink_status"] = compute_drink_status(
             data.get("drink_from_year"),
@@ -1104,23 +1116,32 @@ class WineDatabase:
                 return []
 
             wine_ids = [int(r["id"]) for r in rows]
-            placeholders = ",".join("?" for _ in wine_ids)
-            batch_rows = conn.execute(
-                f"""
-                SELECT * FROM inventory_additions
-                WHERE wine_id IN ({placeholders})
-                ORDER BY added_at DESC, id DESC
-                """,
-                wine_ids,
-            ).fetchall()
-            history_rows = conn.execute(
-                f"""
-                SELECT * FROM consumption_history
-                WHERE wine_id IN ({placeholders})
-                ORDER BY timestamp DESC, id DESC
-                """,
-                wine_ids,
-            ).fetchall()
+            batch_rows: list[sqlite3.Row] = []
+            history_rows: list[sqlite3.Row] = []
+            # Chunk IN (...) lists to stay well under SQLite's bound-parameter limit
+            for start in range(0, len(wine_ids), 500):
+                chunk = wine_ids[start : start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                batch_rows.extend(
+                    conn.execute(
+                        f"""
+                        SELECT * FROM inventory_additions
+                        WHERE wine_id IN ({placeholders})
+                        ORDER BY added_at DESC, id DESC
+                        """,
+                        chunk,
+                    ).fetchall()
+                )
+                history_rows.extend(
+                    conn.execute(
+                        f"""
+                        SELECT * FROM consumption_history
+                        WHERE wine_id IN ({placeholders})
+                        ORDER BY timestamp DESC, id DESC
+                        """,
+                        chunk,
+                    ).fetchall()
+                )
 
             batches_by_wine: dict[int, list[dict[str, Any]]] = {wid: [] for wid in wine_ids}
             for b in batch_rows:

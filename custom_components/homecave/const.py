@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "homecave"
 NAME: Final = "HomeCave"
-VERSION: Final = "0.9.2"
+VERSION: Final = "0.9.3"
 
 # Config & Options keys
 CONF_CELLAR_NAME: Final = "cellar_name"
@@ -59,6 +59,15 @@ MAX_BACKUP_ARCHIVE_BYTES: Final = 50 * 1024 * 1024  # 50 MB max ZIP backup/impor
 MAX_IMAGE_UPLOAD_BYTES: Final = 10 * 1024 * 1024  # 10 MB max bottle label image size
 MAX_GEMINI_CALLS_PER_MINUTE: Final = 10
 GEMINI_RATE_WINDOW_SECONDS: Final = 60.0
+MAX_AI_ENRICH_PER_IMPORT: Final = 150  # cost guard for LLM enrichment during one import
+BACKUP_DOWNLOAD_URL_TTL_SECONDS: Final = 300  # signed backup download links expire after 5 min
+MAX_DECANT_MINUTES: Final = 240
+MAX_PAIRING_TEXT_CHARS: Final = 4000
+MAX_TEXT_FIELD_CHARS: Final = 4000  # generic upper bound for user-provided text fields
+MAX_SHORT_TEXT_CHARS: Final = 300  # names, locations, varietals, etc.
+MAX_SOMMELIER_MESSAGE_CHARS: Final = 2000
+MAX_IMAGE_DATA_URI_CHARS: Final = 15 * 1024 * 1024  # ~10 MB image as base64 data URI
+MAX_IMPORT_PAYLOAD_CHARS: Final = 70 * 1024 * 1024  # ~50 MB archive as base64
 
 # Wine types
 WINE_TYPE_RED: Final = "red"

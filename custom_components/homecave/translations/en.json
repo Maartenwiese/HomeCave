@@ -62,7 +62,7 @@
       },
       "download_backup": {
         "title": "Download Created Backup (.zip)",
-        "description": "Select an existing backup archive to download. When ready, click the direct download link below:\n\n[📥 Download {filename}]({download_url})",
+        "description": "Select an existing backup archive to download. When ready, click the secure download link below (admin only, expires after 5 minutes):\n\n[📥 Download {filename}]({download_url})",
         "data": {
           "backup_file": "Select Backup Archive"
         }

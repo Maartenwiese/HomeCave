@@ -19,7 +19,7 @@ from custom_components.homecave.backup import (
     import_wines_archive,
     list_available_backups,
     restore_backup_archive,
-    stage_backup_for_download,
+    purge_public_backup_copies,
 )
 from custom_components.homecave.config_flow import (
     WineInventoryConfigFlow,
@@ -443,8 +443,8 @@ class TestBackupRestoreAndViews(unittest.TestCase):
                 self.assertEqual(cnt.get("imported_wines"), 6)
                 self.assertEqual(len(db2.list_wines(include_out_of_stock=True)), 6)
 
-    def test_stage_backup_for_download(self) -> None:
-        """Verify staging backup archive into <config>/www/wine_inventory/backups/ for direct HTTP download."""
+    def test_backups_never_published_and_legacy_public_copies_purged(self) -> None:
+        """v0.9.3: backups stay private; legacy copies in <config>/www/homecave/backups/ are purged."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             config_dir = Path(tmp_dir)
             db = WineDatabase(config_dir / "homecave.db")
@@ -452,13 +452,17 @@ class TestBackupRestoreAndViews(unittest.TestCase):
             db.add_or_increment_wine(winery="Test Winery", name="Test Wine", quantity=1)
 
             meta = create_backup_archive(config_dir, db)
-            filename = meta["filename"]
+            self.assertTrue((config_dir / "homecave" / "backups" / meta["filename"]).exists())
+            self.assertFalse((config_dir / "www" / "homecave" / "backups").exists())
 
-            url = stage_backup_for_download(config_dir, filename)
-            self.assertEqual(url, f"/local/homecave/backups/{filename}")
-            staged_path = config_dir / "www" / "homecave" / "backups" / filename
-            self.assertTrue(staged_path.exists())
-            self.assertEqual(staged_path.stat().st_size, meta["size_bytes"])
+            # Simulate a copy that an older HomeCave version staged publicly
+            public_dir = config_dir / "www" / "homecave" / "backups"
+            public_dir.mkdir(parents=True)
+            (public_dir / meta["filename"]).write_bytes(b"PK-old-public-copy")
+            self.assertEqual(purge_public_backup_copies(config_dir), 1)
+            self.assertFalse(public_dir.exists())
+            # Private backup is untouched
+            self.assertTrue((config_dir / "homecave" / "backups" / meta["filename"]).exists())
 
     def test_options_flow_download_and_upload_vivino(self) -> None:
         """Verify OptionsFlow download_backup and upload_vivino menu options."""
@@ -477,8 +481,8 @@ class TestBackupRestoreAndViews(unittest.TestCase):
                 async def async_list_backups(self) -> list:
                     return list_available_backups(config_dir)
 
-                async def async_stage_backup_for_download(self, filename: str) -> str:
-                    return stage_backup_for_download(config_dir, filename)
+                async def async_get_backup_download_url(self, filename: str) -> str:
+                    return f"/api/homecave/download/backup/{filename}"
 
                 async def async_import_vivino_csv(self, csv_text: str) -> dict:
                     return import_vivino_history_csv(db, csv_text)
@@ -514,7 +518,7 @@ class TestBackupRestoreAndViews(unittest.TestCase):
             self.assertIn("download_url", dl_res.get("description_placeholders", {}))
             self.assertEqual(
                 dl_res["description_placeholders"]["download_url"],
-                f"/local/homecave/backups/{filename}",
+                f"/api/homecave/download/backup/{filename}",
             )
 
             # Upload Vivino history step
@@ -724,10 +728,11 @@ class TestBackupRestoreAndViews(unittest.TestCase):
         self.assertIn('key="keep_bottles"', sensor_code)
         self.assertIn('key="past_peak_bottles"', sensor_code)
 
-        # 3. Source check for image_data vol.Any(None, str) in websocket_api.py
+        # 3. Source check: image_data accepts null (v0.5.7) and is size-bounded (v0.9.3)
         ws_file = Path(__file__).resolve().parent.parent / "custom_components" / "homecave" / "websocket_api.py"
         ws_code = ws_file.read_text(encoding="utf-8")
-        self.assertIn('vol.Optional("image_data"): vol.Any(None, str)', ws_code)
+        self.assertIn('vol.Optional("image_data"): vol.Any(None, _IMAGE_STR)', ws_code)
+        self.assertIn("_IMAGE_STR = _bounded_str(MAX_IMAGE_DATA_URI_CHARS)", ws_code)
 
         # 4. Dashboard YAML entities match sensor.homecave_*
         dash_path = Path(__file__).resolve().parent.parent / "dashboards" / "homecave-dashboard.yaml"

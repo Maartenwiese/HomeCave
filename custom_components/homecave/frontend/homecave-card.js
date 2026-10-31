@@ -1,5 +1,5 @@
 /**
- * HomeCave — Local Wine Cellar, AI Label Scanner & SommAI Lovelace Cards (`custom:homecave-card`, v0.9.2)
+ * HomeCave — Local Wine Cellar, AI Label Scanner & SommAI Lovelace Cards (`custom:homecave-card`, v0.9.3)
  * Built using native Home Assistant Web Components (<ha-card>, <ha-icon>) and HA CSS variables.
  */
 
@@ -31,29 +31,46 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+// Coerce a value to a finite number for safe interpolation into HTML templates.
+const num = (v, d = 0) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : d;
+};
+
 function safeExternalUrl(value) {
   if (!value) return "";
   const raw = String(value).trim();
   try {
     const parsed = new URL(raw);
-    if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+    if (parsed.protocol === "https:") {
       return escapeHtml(parsed.href);
     }
   } catch (_) {}
   return "";
 }
 
+// Image sources are restricted to local cover files, Vivino's image CDN,
+// in-memory blob: URLs and strict base64 raster data: URLs (no SVG).
 function safeImageUrl(value) {
   if (!value) return "";
   const raw = String(value).trim();
-  if (raw.startsWith("/local/") || raw.startsWith("/api/")) {
+  if (raw.startsWith("/local/homecave/covers/")) {
     if (raw.includes("..") || raw.includes("\\")) return "";
     return escapeHtml(raw);
   }
-  if (/^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=\s]+$/i.test(raw)) {
+  if (/^data:image\/(png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=\s]+$/i.test(raw)) {
     return escapeHtml(raw);
   }
-  return safeExternalUrl(raw);
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol === "blob:") {
+      return escapeHtml(parsed.href);
+    }
+    if (parsed.protocol === "https:" && parsed.hostname === "images.vivino.com") {
+      return escapeHtml(parsed.href);
+    }
+  } catch (_) {}
+  return "";
 }
 
 function nowLocalIsoMinutes() {
@@ -281,21 +298,11 @@ class WineInventoryCard extends HTMLElement {
   set hass(hass) {
     const firstBind = !this._hass;
     this._hass = hass;
-    this._syncHaAuthTokens(hass);
     if (firstBind) {
       this._fetchInventory();
     } else {
       this._updateEnvironmentBadges();
     }
-  }
-
-  _syncHaAuthTokens(hass) {
-    try {
-      const authData = hass?.auth?.data || hass?.connection?.options?.auth?.data;
-      if (authData && authData.access_token) {
-        window.localStorage.setItem("homecave_ha_tokens", JSON.stringify(authData));
-      }
-    } catch (_) {}
   }
 
   getCardSize() {
@@ -1246,12 +1253,12 @@ class WineInventoryCard extends HTMLElement {
         : statusMeta.label;
 
     return `
-      <div class="wine-item" data-wine-id="${wine.id}">
+      <div class="wine-item" data-wine-id="${num(wine.id)}">
         <div class="wine-item-top">
           <div class="wine-thumb-wrap">
             ${
               safeImageUrl(wine.image_url)
-                ? `<img class="wine-thumb preview-image-clickable" src="${safeImageUrl(wine.image_url)}" alt="${escapeHtml(wine.name)}" data-action="preview-image" data-id="${wine.id}" title="Click to enlarge image" style="cursor: pointer;" />`
+                ? `<img class="wine-thumb preview-image-clickable" src="${safeImageUrl(wine.image_url)}" alt="${escapeHtml(wine.name)}" data-action="preview-image" data-id="${num(wine.id)}" title="Click to enlarge image" style="cursor: pointer;" />`
                 : `<div class="wine-thumb-placeholder type-${escapeHtml(wine.wine_type)}">
                     <ha-icon icon="mdi:glass-wine"></ha-icon>
                   </div>`
@@ -1333,15 +1340,15 @@ class WineInventoryCard extends HTMLElement {
 
         <div class="wine-actions-bar">
           <div class="stepper-group">
-            <button class="ha-btn icon-btn minus-btn" data-action="consume" data-id="${wine.id}" title="Open / Consume Bottle (-1)">
+            <button class="ha-btn icon-btn minus-btn" data-action="consume" data-id="${num(wine.id)}" title="Open / Consume Bottle (-1)">
               <ha-icon icon="mdi:minus"></ha-icon>
             </button>
             <span class="qty-badge">${Number(wine.quantity || 0)} ${Number(wine.quantity) === 1 ? "bottle" : "bottles"}</span>
-            <button class="ha-btn icon-btn plus-btn" data-action="quick-add" data-id="${wine.id}" title="Add Bottle(s) (+1 with timestamp & notes)">
+            <button class="ha-btn icon-btn plus-btn" data-action="quick-add" data-id="${num(wine.id)}" title="Add Bottle(s) (+1 with timestamp & notes)">
               <ha-icon icon="mdi:plus"></ha-icon>
             </button>
           </div>
-          <button class="ha-btn secondary-btn" data-action="detail" data-id="${wine.id}">
+          <button class="ha-btn secondary-btn" data-action="detail" data-id="${num(wine.id)}">
             <ha-icon icon="mdi:notebook-edit-outline"></ha-icon>
             <span>Batches &amp; Notes (${(wine.timeline || []).length})</span>
           </button>
@@ -1380,18 +1387,18 @@ class WineInventoryCard extends HTMLElement {
                 const subMeta = [wine.varietal, wine.region, wine.country].filter(Boolean).join(" • ") || "—";
 
                 return `
-                  <tr data-wine-id="${wine.id}">
+                  <tr data-wine-id="${num(wine.id)}">
                     <td>
                       ${
                         safeImageUrl(wine.image_url)
-                          ? `<img class="wine-list-thumb preview-image-clickable" src="${safeImageUrl(wine.image_url)}" alt="${escapeHtml(wine.name)}" data-action="preview-image" data-id="${wine.id}" title="Click to enlarge image" style="cursor: pointer;" />`
+                          ? `<img class="wine-list-thumb preview-image-clickable" src="${safeImageUrl(wine.image_url)}" alt="${escapeHtml(wine.name)}" data-action="preview-image" data-id="${num(wine.id)}" title="Click to enlarge image" style="cursor: pointer;" />`
                           : `<div class="wine-list-thumb-placeholder type-${escapeHtml(wine.wine_type)}">
                               <ha-icon icon="mdi:glass-wine" style="--mdc-icon-size: 20px;"></ha-icon>
                             </div>`
                       }
                     </td>
                     <td>
-                      <div class="wine-list-title-wrap wine-title-clickable" data-action="detail" data-id="${wine.id}" title="Click to view wine details" style="cursor: pointer;">
+                      <div class="wine-list-title-wrap wine-title-clickable" data-action="detail" data-id="${num(wine.id)}" title="Click to view wine details" style="cursor: pointer;">
                         <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
                           <strong title="${escapeHtml(wine.name)}" style="cursor: pointer; color: var(--primary-color, #a61a2e);">${escapeHtml(wine.name)}</strong>
                           ${
@@ -1429,18 +1436,18 @@ class WineInventoryCard extends HTMLElement {
                     </td>
                     <td style="text-align: center;">
                       <div class="stepper-group" style="justify-content: center;">
-                        <button class="ha-btn icon-btn minus-btn" data-action="consume" data-id="${wine.id}" title="Open / Consume Bottle (-1)" style="padding: 2px 6px; min-width: 26px; min-height: 26px;">
+                        <button class="ha-btn icon-btn minus-btn" data-action="consume" data-id="${num(wine.id)}" title="Open / Consume Bottle (-1)" style="padding: 2px 6px; min-width: 26px; min-height: 26px;">
                           <ha-icon icon="mdi:minus" style="--mdc-icon-size: 14px;"></ha-icon>
                         </button>
                         <strong class="qty-badge" style="min-width: 32px; font-size: 13px;">${Number(wine.quantity || 0)}</strong>
-                        <button class="ha-btn icon-btn plus-btn" data-action="quick-add" data-id="${wine.id}" title="Add Bottle (+1)" style="padding: 2px 6px; min-width: 26px; min-height: 26px;">
+                        <button class="ha-btn icon-btn plus-btn" data-action="quick-add" data-id="${num(wine.id)}" title="Add Bottle (+1)" style="padding: 2px 6px; min-width: 26px; min-height: 26px;">
                           <ha-icon icon="mdi:plus" style="--mdc-icon-size: 14px;"></ha-icon>
                         </button>
                       </div>
                     </td>
                     <td style="text-align: right;">
                       <div class="wine-list-actions" style="justify-content: flex-end;">
-                        <button class="ha-btn secondary-btn" data-action="detail" data-id="${wine.id}" style="padding: 4px 10px; font-size: 12px;">
+                        <button class="ha-btn secondary-btn" data-action="detail" data-id="${num(wine.id)}" style="padding: 4px 10px; font-size: 12px;">
                           <ha-icon icon="mdi:notebook-edit-outline" style="--mdc-icon-size: 16px;"></ha-icon>
                           <span>Details</span>
                         </button>
@@ -1916,7 +1923,7 @@ class WineInventoryCard extends HTMLElement {
                         ? `<div class="scan-existing-banner">
                             <ha-icon icon="mdi:check-circle-outline"></ha-icon>
                             <div>
-                              <strong>Already in your cellar!</strong> Currently <strong>${s.existingWine.quantity}</strong> bottle(s) in stock
+                              <strong>Already in your cellar!</strong> Currently <strong>${num(s.existingWine.quantity)}</strong> bottle(s) in stock
                               (Last bought at: <em>${escapeHtml(s.existingWine.last_purchase_location || "—")}</em>,
                               Location: <em>${escapeHtml(s.existingWine.last_storage_location || "—")}</em>).
                               Saving will increment the bottle count and log this new addition batch.
@@ -1946,7 +1953,7 @@ class WineInventoryCard extends HTMLElement {
                                 .map(
                                   (c, idx) =>
                                     `<option value="${idx}" ${s.selectedVivinoIndex === idx ? "selected" : ""}>
-                                      ${c.prefilter_exact ? "✓ " : ""}${escapeHtml(c.winery)}: ${escapeHtml(c.name)} (${c.vintage || "NV"}) – ★ ${c.vivino_rating ?? "?"} [${c.vivino_ratings_count ? c.vivino_ratings_count.toLocaleString() : 0} ratings]
+                                      ${c.prefilter_exact ? "✓ " : ""}${escapeHtml(c.winery)}: ${escapeHtml(c.name)} (${escapeHtml(c.vintage || "NV")}) – ★ ${escapeHtml(c.vivino_rating ?? "?")} [${num(c.vivino_ratings_count).toLocaleString()} ratings]
                                     </option>`
                                 )
                                 .join("")}
@@ -2204,7 +2211,7 @@ class WineInventoryCard extends HTMLElement {
             <form id="consume-form" class="form-grid">
               <div class="form-field">
                 <label>Bottles Opened</label>
-                <input class="ha-input" type="number" name="delta" min="1" max="${Math.max(1, w.quantity)}" required value="1" />
+                <input class="ha-input" type="number" name="delta" min="1" max="${Math.max(1, num(w.quantity))}" required value="1" />
               </div>
               <div class="form-field">
                 <label>Your Personal Rating (1.0–5.0)</label>
@@ -2218,10 +2225,10 @@ class WineInventoryCard extends HTMLElement {
                         ${activeBatches
                           .map(
                             (b) =>
-                              `<option value="${b.id}" ${cf.batch_id === b.id ? "selected" : ""}>
+                              `<option value="${num(b.id)}" ${cf.batch_id === b.id ? "selected" : ""}>
                                 ${escapeHtml(b.storage_location || "Unspecified Slot")} • Bought at ${escapeHtml(
                                 b.purchase_location || "—"
-                              )} (${formatDisplayDate(b.added_at)}) — ${b.quantity_remaining} left
+                              )} (${formatDisplayDate(b.added_at)}) — ${num(b.quantity_remaining)} left
                               </option>`
                           )
                           .join("")}
@@ -2277,7 +2284,7 @@ class WineInventoryCard extends HTMLElement {
          <div class="modal-inner">
           <div class="modal-cq">
           <div class="modal-header">
-            <h2><ha-icon icon="mdi:notebook-edit-outline"></ha-icon> <span>${escapeHtml(w.winery)} – ${escapeHtml(w.name)} (${w.vintage || "NV"})</span></h2>
+            <h2><ha-icon icon="mdi:notebook-edit-outline"></ha-icon> <span>${escapeHtml(w.winery)} – ${escapeHtml(w.name)} (${escapeHtml(w.vintage || "NV")})</span></h2>
             <div class="modal-header-actions">
               <button type="button" class="ha-btn secondary-btn icon-btn btn-font-scale" id="btn-detail-font-scale" title="Adjust text size (S / M / L / XL)" aria-label="Text size ${this._fontScaleLabel()}">
                 <span class="font-scale-label">Aa <small>${this._fontScaleLabel()}</small></span>
@@ -2290,11 +2297,11 @@ class WineInventoryCard extends HTMLElement {
               <div class="detail-thumb-wrap" title="Click to view or change bottle photo">
                 ${
                   safeImageUrl(w.image_url)
-                    ? `<img class="detail-wine-thumb preview-image-clickable" src="${safeImageUrl(w.image_url)}" alt="${escapeHtml(w.name)}" data-action="preview-image" data-id="${w.id}" />
+                    ? `<img class="detail-wine-thumb preview-image-clickable" src="${safeImageUrl(w.image_url)}" alt="${escapeHtml(w.name)}" data-action="preview-image" data-id="${num(w.id)}" />
                        <div class="thumb-zoom-overlay">
                          <ha-icon icon="mdi:camera" style="--mdc-icon-size: 14px;"></ha-icon>
                        </div>`
-                    : `<div class="wine-thumb-placeholder detail-wine-thumb preview-image-clickable type-${escapeHtml(w.wine_type)}" data-action="preview-image" data-id="${w.id}" style="cursor: pointer;" title="Click to add photo">
+                    : `<div class="wine-thumb-placeholder detail-wine-thumb preview-image-clickable type-${escapeHtml(w.wine_type)}" data-action="preview-image" data-id="${num(w.id)}" style="cursor: pointer;" title="Click to add photo">
                          <ha-icon icon="mdi:camera-plus-outline"></ha-icon>
                          <span style="font-size: 10px; margin-top: 2px;">Add Photo</span>
                        </div>`
@@ -2335,7 +2342,7 @@ class WineInventoryCard extends HTMLElement {
                   }
                   ${
                     (w.vivino_url || w.vivino_rating || df.vivino_url || df.vivino_rating)
-                      ? `<button type="button" class="ha-btn secondary-btn detail-small-btn" id="btn-detail-unlink-vivino" data-id="${w.id}" style="color: var(--error-color, #c62828); border-color: rgba(198, 40, 40, 0.35);" title="Remove incorrect Vivino link and ratings">
+                      ? `<button type="button" class="ha-btn secondary-btn detail-small-btn" id="btn-detail-unlink-vivino" data-id="${num(w.id)}" style="color: var(--error-color, #c62828); border-color: rgba(198, 40, 40, 0.35);" title="Remove incorrect Vivino link and ratings">
                            <ha-icon icon="mdi:link-off" style="--mdc-icon-size: 14px;"></ha-icon>
                            <span>Remove Vivino Link</span>
                          </button>`
@@ -2346,25 +2353,25 @@ class WineInventoryCard extends HTMLElement {
                       ? `<span class="filter-chip detail-pill" style="border-color: rgba(46,125,50,0.5); color: #2e7d32;" title="${w.vivino_match_confidence === "high" ? "Automatically verified: exact producer + cuvée and AI label check" : "Confirmed by you"}">✓ ${w.vivino_match_confidence === "high" ? "Verified" : "Confirmed"}</span>`
                       : ""
                   }
-                  ${w.personal_rating ? `<span class="personal-badge detail-personal-badge">My Rating: ★ ${w.personal_rating}</span>` : ""}
+                  ${w.personal_rating ? `<span class="personal-badge detail-personal-badge">My Rating: ★ ${num(w.personal_rating)}</span>` : ""}
                 </div>
 
                 <!-- Bottle Quantity Stepper (+ / -) with 0-Bottle Warning -->
                 <div class="detail-stepper-wrap">
                   <span class="detail-stepper-label">In Cellar:</span>
                   <div class="stepper-controls">
-                    <button type="button" class="ha-btn icon-btn detail-step-btn" id="btn-detail-qty-minus" data-id="${w.id}" data-qty="${w.quantity}" title="Decrease bottle count (-1)">
+                    <button type="button" class="ha-btn icon-btn detail-step-btn" id="btn-detail-qty-minus" data-id="${num(w.id)}" data-qty="${num(w.quantity)}" title="Decrease bottle count (-1)">
                       <ha-icon icon="mdi:minus"></ha-icon>
                     </button>
                     <span id="detail-qty-display" class="detail-qty-value">
                       ${Number(w.quantity || 0)}
                     </span>
-                    <button type="button" class="ha-btn icon-btn detail-step-btn" id="btn-detail-qty-plus" data-id="${w.id}" data-qty="${w.quantity}" title="Increase bottle count (+1)">
+                    <button type="button" class="ha-btn icon-btn detail-step-btn" id="btn-detail-qty-plus" data-id="${num(w.id)}" data-qty="${num(w.quantity)}" title="Increase bottle count (+1)">
                       <ha-icon icon="mdi:plus"></ha-icon>
                     </button>
                   </div>
                   <span class="detail-stepper-unit">${Number(w.quantity) === 1 ? "bottle" : "bottles"}</span>
-                  <button type="button" class="ha-btn secondary-btn detail-research-btn" id="btn-detail-research-wine" data-id="${w.id}" title="Deep AI research on producer, terroir & cuvée history" ${this._researchingWineId === w.id ? "disabled" : ""}>
+                  <button type="button" class="ha-btn secondary-btn detail-research-btn" id="btn-detail-research-wine" data-id="${num(w.id)}" title="Deep AI research on producer, terroir & cuvée history" ${this._researchingWineId === w.id ? "disabled" : ""}>
                     <ha-icon icon="mdi:auto-fix" style="color: var(--primary-color);"></ha-icon>
                     <span>${this._researchingWineId === w.id ? "Researching..." : "Research Wine (AI)"}</span>
                   </button>
@@ -2487,7 +2494,7 @@ class WineInventoryCard extends HTMLElement {
                              <ha-icon icon="mdi:auto-fix" style="color: var(--primary-color);"></ha-icon>
                              <strong>Sommelier &amp; Producer AI Research</strong>
                            </div>
-                           <button type="button" class="ha-btn secondary-btn icon-btn" id="btn-re-research-wine" data-id="${w.id}" title="Re-run AI Research">
+                           <button type="button" class="ha-btn secondary-btn icon-btn" id="btn-re-research-wine" data-id="${num(w.id)}" title="Re-run AI Research">
                              <ha-icon icon="mdi:refresh"></ha-icon>
                            </button>
                          </div>
@@ -2597,7 +2604,7 @@ class WineInventoryCard extends HTMLElement {
                 }
               </div>
               <div class="modal-actions full-width detail-form-actions">
-                <button type="button" class="ha-btn danger-btn" id="btn-delete-wine" data-id="${w.id}" style="background: rgba(198, 40, 40, 0.12); color: var(--error-color, #c62828); border-color: rgba(198, 40, 40, 0.35);">
+                <button type="button" class="ha-btn danger-btn" id="btn-delete-wine" data-id="${num(w.id)}" style="background: rgba(198, 40, 40, 0.12); color: var(--error-color, #c62828); border-color: rgba(198, 40, 40, 0.35);">
                   <ha-icon icon="mdi:trash-can-outline"></ha-icon>
                   <span>Delete Wine</span>
                 </button>
@@ -2618,7 +2625,7 @@ class WineInventoryCard extends HTMLElement {
                         (b) => `
                         <div class="timeline-item">
                           <div class="timeline-title">
-                            <strong>+${b.quantity_added} bottle(s)</strong> (${b.quantity_remaining} left in stock)
+                            <strong>+${num(b.quantity_added)} bottle(s)</strong> (${num(b.quantity_remaining)} left in stock)
                             • <span>${escapeHtml(formatDisplayDate(b.added_at))}</span>
                           </div>
                           <div class="timeline-meta">
@@ -2644,11 +2651,11 @@ class WineInventoryCard extends HTMLElement {
                         (h) => `
                         <div class="timeline-item">
                           <div class="timeline-title">
-                            <span class="event-tag ${h.delta > 0 ? "added" : "consumed"}">
-                              ${h.delta > 0 ? `Added +${h.delta}` : `Opened ${h.delta}`}
+                            <span class="event-tag ${num(h.delta) > 0 ? "added" : "consumed"}">
+                              ${num(h.delta) > 0 ? `Added +${num(h.delta)}` : `Opened ${num(h.delta)}`}
                             </span>
                             <span>${escapeHtml(formatDisplayDate(h.timestamp))}</span>
-                            ${h.personal_rating ? `<span class="personal-badge">★ ${h.personal_rating}</span>` : ""}
+                            ${h.personal_rating ? `<span class="personal-badge">★ ${num(h.personal_rating)}</span>` : ""}
                           </div>
                           ${
                             h.tasting_notes
@@ -2704,7 +2711,7 @@ class WineInventoryCard extends HTMLElement {
                 <span>${escapeHtml(wine.name)}</span>
               </h2>
               <div style="font-size: 12px; color: var(--secondary-text-color); margin-top: 2px;">
-                ${escapeHtml(wine.winery)} (${wine.vintage || "NV"})
+                ${escapeHtml(wine.winery)} (${escapeHtml(wine.vintage || "NV")})
               </div>
             </div>
             <button class="ha-btn icon-btn" id="close-image-preview-btn" title="Close">
@@ -3075,16 +3082,16 @@ class WineInventoryCard extends HTMLElement {
         : this._wines.filter((w) => this._isWineTasted(w)).length;
 
     const tabs = [
-      { id: "all", label: `In Stock (${stats.total_bottles || 0})` },
-      { id: "ready", label: `Ready to Drink (${stats.ready_to_drink_bottles || 0})` },
-      { id: "drink_soon", label: `Soon (${stats.drink_soon_bottles || 0})` },
-      { id: "keep", label: `Keep (${stats.keep_bottles || stats.hold_bottles || 0})` },
-      { id: "past_peak", label: `Past Peak (${stats.past_peak_bottles || 0})` },
-      { id: "red", label: `Red (${stats.by_type?.red || 0})` },
-      { id: "white", label: `White (${stats.by_type?.white || 0})` },
-      { id: "rose", label: `Rosé (${stats.by_type?.rose || 0})` },
-      { id: "sparkling", label: `Sparkling (${stats.by_type?.sparkling || 0})` },
-      { id: "tasted", label: `🥂 Tasted (${tastedCount})` },
+      { id: "all", label: `In Stock (${num(stats.total_bottles)})` },
+      { id: "ready", label: `Ready to Drink (${num(stats.ready_to_drink_bottles)})` },
+      { id: "drink_soon", label: `Soon (${num(stats.drink_soon_bottles)})` },
+      { id: "keep", label: `Keep (${num(stats.keep_bottles || stats.hold_bottles)})` },
+      { id: "past_peak", label: `Past Peak (${num(stats.past_peak_bottles)})` },
+      { id: "red", label: `Red (${num(stats.by_type?.red)})` },
+      { id: "white", label: `White (${num(stats.by_type?.white)})` },
+      { id: "rose", label: `Rosé (${num(stats.by_type?.rose)})` },
+      { id: "sparkling", label: `Sparkling (${num(stats.by_type?.sparkling)})` },
+      { id: "tasted", label: `🥂 Tasted (${num(tastedCount)})` },
     ];
 
     this.shadowRoot.innerHTML = `
@@ -4357,7 +4364,7 @@ class WineInventoryCard extends HTMLElement {
               <span>${escapeHtml(this._cellarName)}</span>
             </h1>
             <div class="env-pills">
-              <span><strong>${stats.total_bottles || 0}</strong> bottles (${stats.unique_wines || 0} unique)</span>
+              <span><strong>${num(stats.total_bottles)}</strong> bottles (${num(stats.unique_wines)} unique)</span>
               ${
                 this._tempEntity
                   ? `<span class="env-pill"><ha-icon icon="mdi:thermometer"></ha-icon><span id="env-temp-val">—</span></span>`
@@ -4706,12 +4713,6 @@ class WineCellarSummaryCard extends HTMLElement {
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
-    try {
-      const authData = hass?.auth?.data || hass?.connection?.options?.auth?.data;
-      if (authData && authData.access_token) {
-        window.localStorage.setItem("homecave_ha_tokens", JSON.stringify(authData));
-      }
-    } catch (_) {}
     if (this._helperCard) {
       this._helperCard.hass = hass;
     }
@@ -5032,15 +5033,15 @@ class WineCellarSummaryCard extends HTMLElement {
             this._config.show_kpis !== false
               ? `<div class="sum-kpis">
                   <div class="sum-kpi">
-                    <strong>${stats.total_bottles || 0}</strong>
+                    <strong>${num(stats.total_bottles)}</strong>
                     <span>Bottles</span>
                   </div>
                   <div class="sum-kpi">
-                    <strong>${stats.ready_to_drink_bottles || 0}</strong>
+                    <strong>${num(stats.ready_to_drink_bottles)}</strong>
                     <span>Ready Now</span>
                   </div>
                   <div class="sum-kpi">
-                    <strong>${stats.estimated_cellar_value ? `${Math.round(stats.estimated_cellar_value)} ${escapeHtml(this._currency)}` : (stats.unique_wines || 0)}</strong>
+                    <strong>${stats.estimated_cellar_value ? `${Math.round(num(stats.estimated_cellar_value))} ${escapeHtml(this._currency)}` : num(stats.unique_wines)}</strong>
                     <span>${stats.estimated_cellar_value ? "Est. Value" : "Unique Wines"}</span>
                   </div>
                 </div>`
@@ -5054,7 +5055,7 @@ class WineCellarSummaryCard extends HTMLElement {
                 : wines
                     .map(
                       (w) => `
-                      <div class="sum-row" data-wine-id="${w.id}" title="Tap to open wine details">
+                      <div class="sum-row" data-wine-id="${num(w.id)}" title="Tap to open wine details">
                         ${
                           safeImageUrl(w.image_url)
                             ? `<img class="sum-thumb" src="${safeImageUrl(w.image_url)}" alt="${escapeHtml(w.name)}" />`
@@ -5564,7 +5565,7 @@ class WineSommAICard extends HTMLElement {
           ${
             this._pendingImage
               ? `<div class="pending-bar">
-                  <img src="${this._pendingImage}" class="pending-thumb" />
+                  <img src="${safeImageUrl(this._pendingImage)}" class="pending-thumb" />
                   <span style="flex:1;">Dish photo attached</span>
                   <button id="clear-img-btn" style="background:none; border:none; cursor:pointer; font-weight:700;">✕</button>
                 </div>`
@@ -5588,7 +5589,7 @@ class WineSommAICard extends HTMLElement {
       return `
         <div class="msg msg-user">
           <div class="bubble">
-            ${m.image_data ? `<img src="${m.image_data}" class="user-img" />` : ""}
+            ${safeImageUrl(m.image_data) ? `<img src="${safeImageUrl(m.image_data)}" class="user-img" />` : ""}
             <div>${escapeHtml(m.text || "Pair this dish")}</div>
           </div>
         </div>
@@ -5621,7 +5622,7 @@ class WineSommAICard extends HTMLElement {
                          <div class="rec-top">
                            <span class="pill ${isBest ? "pill-best" : "pill-alt"}">${isBest ? "★ Best Match" : "Alternative Match"}</span>
                            ${rec.serving_temp_c ? `<span class="pill pill-meta">🌡️ ${escapeHtml(rec.serving_temp_c)}</span>` : ""}
-                           ${rec.decant_minutes ? `<span class="pill pill-meta">⏳ Decant ${rec.decant_minutes}m</span>` : ""}
+                           ${Math.round(num(rec.decant_minutes)) > 0 ? `<span class="pill pill-meta">⏳ Decant ${Math.round(num(rec.decant_minutes))}m</span>` : ""}
                          </div>
                          <div class="rec-name">${escapeHtml(rec.wine_title)}</div>
                          <div class="rec-notes">${escapeHtml(rec.sommelier_notes)}</div>

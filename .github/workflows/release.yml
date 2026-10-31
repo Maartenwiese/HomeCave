@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Create ZIP archive for HACS release
         run: |
@@ -23,7 +23,7 @@ jobs:
           zip -r "${{ github.workspace }}/homecave.zip" . -x "*.pyc" "__pycache__/*"
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: homecave.zip
           generate_release_notes: true

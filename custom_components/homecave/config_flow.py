@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 try:
@@ -363,7 +364,7 @@ class WineInventoryOptionsFlowHandler(config_entries.OptionsFlow):
             chosen = user_input.get("backup_file")
             if chosen and coordinator:
                 try:
-                    download_url = await coordinator.async_stage_backup_for_download(chosen)
+                    download_url = await coordinator.async_get_backup_download_url(chosen)
                     return self.async_show_form(
                         step_id="download_backup",
                         data_schema=vol.Schema(
@@ -410,10 +411,14 @@ class WineInventoryOptionsFlowHandler(config_entries.OptionsFlow):
                 file_path = (user_input.get("file_path") or user_input.get("csv_file_path") or "").strip()
                 if file_path:
                     try:
+                        from .backup import resolve_safe_storage_path
+
                         config_dir = Path(getattr(self.hass.config, "config_dir", "."))
-                        safe_path = config_dir / file_path
-                        if not safe_path.is_file():
-                            safe_path = Path(file_path)
+                        # Security: only files inside HomeCave's private storage folders
+                        # (<config>/homecave/...) may be imported; arbitrary paths are refused.
+                        safe_path = await self.hass.async_add_executor_job(
+                            resolve_safe_storage_path, config_dir, file_path
+                        )
                         if safe_path.is_file():
                             if safe_path.suffix.lower() == ".zip":
                                 res = await coordinator.async_import_vivino_zip(safe_path)

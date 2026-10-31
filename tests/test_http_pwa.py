@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 
 from custom_components.homecave.const import DOMAIN, MOBILE_APP_URL_BASE, VERSION
+
+# Admin-only PWA actions (backup_create, import, delete) require an admin user since v0.9.3
+_ADMIN_USER = SimpleNamespace(id="admin-user", name="Admin", is_admin=True, permissions=None)
 from custom_components.homecave.coordinator import WineInventoryCoordinator
 from custom_components.homecave.http_api import (
     WineInventoryMobileAssetView,
@@ -138,7 +142,7 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
 
         # Delete wine via POST /api/homecave/pwa/delete
         status, deleted = await async_handle_pwa_post(
-            self.hass, "delete", {"wine_id": wine_id}
+            self.hass, "delete", {"wine_id": wine_id}, user=_ADMIN_USER
         )
         self.assertEqual(status, 200)
         self.assertTrue(deleted["deleted"])
@@ -198,7 +202,9 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         self.assertIn("btn-detail-font-scale", card_js)
         self.assertIn(".modal-inner", card_js)
         self.assertIn("@container lsmodal", card_js)
-        self.assertIn("homecave_ha_tokens", card_js)
+        # v0.9.3: the card must no longer copy HA auth tokens into localStorage
+        self.assertNotIn('setItem("homecave_ha_tokens"', card_js)
+        self.assertNotIn("_syncHaAuthTokens", card_js)
         self.assertIn("bottle-library-input", card_js)
 
     async def test_v031_mobile_auth_font_list_scroll_and_library(self) -> None:
@@ -389,8 +395,11 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         self.assertIn('id="hc-splash"', html)
         self.assertIn("/homecave/logo-512.png", html)
         self.assertIn("HomeCave - your local Wine Cellar", html)
-        self.assertIn("2000", html)
-        self.assertIn("sessionStorage", html)
+        # v0.9.3: splash logic lives in external splash.js (CSP script-src 'self')
+        splash_js = (MOBILE_DIR / "splash.js").read_text(encoding="utf-8")
+        self.assertIn('src="/homecave/splash.js', html)
+        self.assertIn("2000", splash_js)
+        self.assertIn("sessionStorage", splash_js)
 
     async def test_v035_float_bug_splash_version_fullscreen_stepper_and_autosize(self) -> None:
         """v0.3.5: empty-string float bug fixed, splash shows version, full-screen pages, no cellar +/- stepper, auto-scaling notes."""
@@ -619,6 +628,7 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
             or '"version": "0.5.7"' in manifest_json
             or '"version": "0.9.1"' in manifest_json
             or '"version": "0.9.2"' in manifest_json
+            or '"version": "0.9.3"' in manifest_json
         )
         self.assertTrue(
             "v0.3.9" in app_js
@@ -633,6 +643,7 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
             or "v0.5.7" in app_js
             or "v0.9.1" in app_js
             or "v0.9.2" in app_js
+            or "v0.9.3" in app_js
         )
 
         # 2. Font scale defaults to 1.15 (Large)
@@ -677,10 +688,18 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
             self.assertTrue((brand_dir / "logo.png").exists())
 
         # 8. Mobile PWA backup creation & Vivino import API endpoints
-        status_backup, res_backup = await async_handle_pwa_post(self.hass, "backup_create", {})
+        status_denied, _ = await async_handle_pwa_post(self.hass, "backup_create", {})
+        self.assertEqual(status_denied, 403)
+        status_backup, res_backup = await async_handle_pwa_post(
+            self.hass, "backup_create", {}, user=_ADMIN_USER
+        )
         self.assertEqual(status_backup, 200)
         self.assertTrue(res_backup.get("ok"))
-        self.assertTrue(res_backup.get("download_url", "").startswith("/local/homecave/backups/"))
+        # v0.9.3: backups are served by the admin-only download view, never from /local/
+        self.assertTrue(
+            res_backup.get("download_url", "").startswith("/api/homecave/download/backup/")
+        )
+        self.assertNotIn("file_path", res_backup.get("backup", {}))
 
         csv_content = (
             "Wine Name,Winery / Producer,Vintage,Region,Country,My Rating,Review Text / Notes,Date Logged,Price Paid,Quantity In Cellar\n"
@@ -690,6 +709,7 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
             self.hass,
             "import",
             {"format_type": "csv", "payload": csv_content},
+            user=_ADMIN_USER,
         )
         self.assertEqual(status_import, 200)
         self.assertEqual(res_import.get("imported_count"), 1)
@@ -764,7 +784,7 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         self.assertIn("_renderStatsSection", config_view_code)
 
         # Wine thumbnail click navigates to Detailed view
-        self.assertIn('data-detail-id="${w.id}"', app_js)
+        self.assertIn('data-detail-id="${num(w.id)}"', app_js)
         self.assertNotIn('data-preview-id="${w.id}"', app_js)
 
         # Sommelier & Producer AI Research font size bumped by +1
@@ -792,11 +812,11 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         self.assertIn('hold: { label: "Keep", color: "#0277bd" }', app_js)
         self.assertIn('drink_soon: { label: "Soon", color: "#ef6c00" }', app_js)
         self.assertIn('ready: { label: "Ready", color: "#2e7d32" }', app_js)
-        self.assertIn('{ id: "keep", label: `Keep (${stats.keep_bottles || stats.hold_bottles || 0})` }', app_js)
+        self.assertIn('{ id: "keep", label: `Keep (${num(stats.keep_bottles || stats.hold_bottles)})` }', app_js)
 
         self.assertIn('hold: { label: "Keep", color: "var(--info-color, #0288d1)" }', card_js)
         self.assertIn('drink_soon: { label: "Soon", color: "var(--warning-color, #ef6c00)" }', card_js)
-        self.assertIn('{ id: "keep", label: `Keep (${stats.keep_bottles || stats.hold_bottles || 0})` }', card_js)
+        self.assertIn('{ id: "keep", label: `Keep (${num(stats.keep_bottles || stats.hold_bottles)})` }', card_js)
 
         # 2. Invert Sort Buttons & Logic
         self.assertIn("id=\"btn-mobile-invert-sort\"", app_js)

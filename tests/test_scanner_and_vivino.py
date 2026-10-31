@@ -801,17 +801,23 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
             valid_jpeg = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01COVER_TEST"
             attempts = 0
 
-            def _fake_urlopen(req: Any, timeout: float = 6.0) -> Any:
+            def _fake_open(req: Any, timeout: float = 6.0) -> Any:
                 nonlocal attempts
                 attempts += 1
                 if attempts < 3:
                     raise urllib.error.URLError("temporary network timeout")
                 resp = MagicMock()
+                resp.status = 200
                 resp.read.return_value = valid_jpeg
                 resp.__enter__.return_value = resp
                 return resp
 
-            with patch("urllib.request.urlopen", side_effect=_fake_urlopen), patch("time.sleep") as mock_sleep:
+            fake_opener = MagicMock()
+            fake_opener.open.side_effect = _fake_open
+            with patch(
+                "custom_components.homecave.backup.urllib.request.build_opener",
+                return_value=fake_opener,
+            ), patch("time.sleep") as mock_sleep:
                 saved_url = download_and_save_cover_image(
                     config_dir,
                     "https://images.vivino.com/labels/retry_wine.jpg",
@@ -820,8 +826,9 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
                 self.assertEqual(mock_sleep.call_count, 2)
                 mock_sleep.assert_any_call(3)
                 mock_sleep.assert_any_call(5)
-                self.assertTrue(saved_url.startswith("/local/homecave/covers/"))
-                cover_file = config_dir / "www" / "homecave" / "covers" / "vivino_retry_wine.jpg"
+                # v0.9.3: hashed filename, extension derived from the image magic bytes
+                self.assertRegex(saved_url, r"^/local/homecave/covers/vivino_[0-9a-f]{24}\.jpg$")
+                cover_file = config_dir / "www" / "homecave" / "covers" / Path(saved_url).name
                 self.assertTrue(cover_file.exists())
                 self.assertEqual(cover_file.read_bytes(), valid_jpeg)
 
@@ -1550,9 +1557,11 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
                     self.assertEqual(kwargs_res.get("api_key"), "sk-ant-active-key")
 
                 # 3. async_sommelier_chat passes provider='claude'
-                with patch("custom_components.homecave.coordinator.async_sommelier_dish_pairing", return_value={"status": "ok", "pairing": {"response": "Pairing advice"}, "response": "Pairing advice"}) as mock_somm:
+                with patch("custom_components.homecave.coordinator.async_sommelier_dish_pairing", return_value={"status": "ok", "pairing": {"conversational_response": "Pairing advice"}}) as mock_somm:
                     somm_res = await coordinator.async_sommelier_chat(query_text="Lamb chops")
-                    self.assertEqual(somm_res["response"], "Pairing advice")
+                    # v0.9.3: pairing output is validated/normalised before reaching clients
+                    self.assertEqual(somm_res["conversational_response"], "Pairing advice")
+                    self.assertEqual(somm_res["recommended_wines"], [])
                     mock_somm.assert_called_once()
                     _, kwargs_somm = mock_somm.call_args
                     self.assertEqual(kwargs_somm.get("provider"), "claude")

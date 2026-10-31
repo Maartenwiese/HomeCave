@@ -1,5 +1,5 @@
 /**
- * HomeCave Standalone Mobile Web App (PWA) — /homecave/app.js (v0.9.2)
+ * HomeCave Standalone Mobile Web App (PWA) — /homecave/app.js (v0.9.3)
  * Runs parallel to the native Home Assistant UI, inherits Home Assistant OAuth2
  * authentication, defaults to Large (L) text scale, and supports Home Screen installation.
  */
@@ -39,6 +39,12 @@ function esc(value) {
     .replace(/'/g, "&#039;");
 }
 
+// Coerce a value to a finite number for safe interpolation into HTML templates.
+const num = (v, d = 0) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : d;
+};
+
 function safeExternalUrl(url) {
   if (!url) return "";
   const raw = String(url).trim();
@@ -49,21 +55,22 @@ function safeExternalUrl(url) {
   return "";
 }
 
+// Image sources are restricted to local cover files, Vivino's image CDN,
+// in-memory blob: URLs and strict base64 raster data: URLs (no SVG).
 function safeImageUrl(url) {
   if (!url) return "";
   const raw = String(url).trim();
-  if (
-    (raw.startsWith("/local/") || raw.startsWith("/api/")) &&
-    !raw.includes("..")
-  ) {
+  if (raw.startsWith("/local/homecave/covers/")) {
+    if (raw.includes("..") || raw.includes("\\")) return "";
     return esc(raw);
   }
-  if (/^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=\s]+$/i.test(raw)) {
+  if (/^data:image\/(png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=\s]+$/i.test(raw)) {
     return esc(raw);
   }
   try {
     const parsed = new URL(raw);
-    if (parsed.protocol === "https:") return esc(parsed.href);
+    if (parsed.protocol === "blob:") return esc(parsed.href);
+    if (parsed.protocol === "https:" && parsed.hostname === "images.vivino.com") return esc(parsed.href);
   } catch (_) {}
   return "";
 }
@@ -91,8 +98,8 @@ function personalRatingMeta(rawVal) {
       badgeText: "Slide 1.0–5.0 to rate",
     };
   }
-  const num = Number(rawVal);
-  if (!Number.isFinite(num)) {
+  const numeric = Number(rawVal);
+  if (!Number.isFinite(numeric)) {
     return {
       rated: false,
       valueStr: "",
@@ -101,7 +108,7 @@ function personalRatingMeta(rawVal) {
       badgeText: "Slide 1.0–5.0 to rate",
     };
   }
-  const clamped = Math.min(5.0, Math.max(1.0, Math.round(num * 10) / 10));
+  const clamped = Math.min(5.0, Math.max(1.0, Math.round(numeric * 10) / 10));
   const valueStr = clamped.toFixed(1);
   let tier = "Good";
   if (clamped >= 4.95) tier = "Excellent!";
@@ -503,18 +510,35 @@ class HomeCaveMobileApp {
   }
 
   async _initAuthAndFetchState() {
+    // Purge refresh tokens that older Lovelace card versions copied into localStorage.
+    try {
+      localStorage.removeItem("homecave_ha_tokens");
+    } catch (_) {}
     await this._handleAuthCallback();
     await this.fetchState();
   }
 
+  /**
+   * Token sources, in read order:
+   *  1. in-memory tokens (refreshed copies of HA's session, or the PWA's own tokens)
+   *  2. `hassTokens`  — Home Assistant's own session (READ-ONLY, never written here)
+   *  3. `homecave_pwa_tokens` — tokens from the PWA's own OAuth login flow
+   */
   _readStoredTokens() {
-    const keys = ["hassTokens", "homecave_ha_tokens"];
-    for (const key of keys) {
+    if (this._memTokens && (this._memTokens.access_token || this._memTokens.refresh_token)) {
+      return this._memTokens;
+    }
+    const keys = [
+      ["hassTokens", "ha"],
+      ["homecave_pwa_tokens", "pwa"],
+    ];
+    for (const [key, source] of keys) {
       try {
         const raw = localStorage.getItem(key);
         if (!raw) continue;
         const parsed = JSON.parse(raw);
         if (parsed && (parsed.access_token || parsed.refresh_token)) {
+          this._tokenSource = source;
           return parsed;
         }
       } catch (_) {}
@@ -522,22 +546,41 @@ class HomeCaveMobileApp {
     return null;
   }
 
-  _saveTokens(tokenData) {
+  _saveTokens(tokenData, source = this._tokenSource || "pwa") {
     if (!tokenData || typeof tokenData !== "object") return;
+    this._memTokens = tokenData;
+    this._tokenSource = source;
+    // Only the PWA's own OAuth tokens are persisted; HA's session stays in memory.
+    if (source !== "pwa") return;
     try {
-      localStorage.setItem("homecave_ha_tokens", JSON.stringify(tokenData));
-      if (!localStorage.getItem("hassTokens")) {
-        localStorage.setItem("hassTokens", JSON.stringify(tokenData));
-      }
+      localStorage.setItem("homecave_pwa_tokens", JSON.stringify(tokenData));
     } catch (_) {}
+  }
+
+  _newOAuthState() {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
   }
 
   async _handleAuthCallback() {
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
     if (!code) return;
+    const returnedState = params.get("state") || "";
+    let expectedState = "";
+    try {
+      expectedState = sessionStorage.getItem("homecave_oauth_state") || "";
+      sessionStorage.removeItem("homecave_oauth_state");
+    } catch (_) {}
     const clientId = `${window.location.origin}/`;
     try {
+      if (!expectedState || returnedState !== expectedState) {
+        // Login CSRF guard: never exchange a code we did not request.
+        console.warn("HomeCave OAuth callback ignored: state mismatch");
+        this.state.authRequired = true;
+        return;
+      }
       const body = new URLSearchParams({
         grant_type: "authorization_code",
         code,
@@ -560,7 +603,7 @@ class HomeCaveMobileApp {
           expires_in: data.expires_in || 1800,
           expires: Date.now() + expiresInMs,
         };
-        this._saveTokens(tokenObj);
+        this._saveTokens(tokenObj, "pwa");
         this.state.authRequired = false;
       }
     } catch (err) {
@@ -577,6 +620,7 @@ class HomeCaveMobileApp {
 
   async _refreshAccessToken(tokenData) {
     if (!tokenData || !tokenData.refresh_token) return null;
+    const source = this._tokenSource || "pwa";
     const clientId = tokenData.clientId || `${window.location.origin}/`;
     try {
       const body = new URLSearchParams({
@@ -599,12 +643,8 @@ class HomeCaveMobileApp {
         expires_in: refreshed.expires_in || 1800,
         expires: Date.now() + expiresInMs,
       };
-      this._saveTokens(updated);
-      try {
-        if (localStorage.getItem("hassTokens")) {
-          localStorage.setItem("hassTokens", JSON.stringify(updated));
-        }
-      } catch (_) {}
+      // Never write HA's own `hassTokens`; HA-sourced tokens stay in memory only.
+      this._saveTokens(updated, source);
       return updated.access_token;
     } catch (_) {
       return null;
@@ -629,8 +669,45 @@ class HomeCaveMobileApp {
   redirectToHomeAssistantLogin() {
     const clientId = `${window.location.origin}/`;
     const redirectUri = `${window.location.origin}/homecave/?auth_callback=1`;
-    const authUrl = `/auth/authorize?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}`;
+    const state = this._newOAuthState();
+    try {
+      sessionStorage.setItem("homecave_oauth_state", state);
+    } catch (_) {}
+    const authUrl = `/auth/authorize?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}`;
     window.location.assign(authUrl);
+  }
+
+  /** Sign out of the PWA: revoke its own refresh token and clear local auth state. */
+  async signOut() {
+    const tokenData = this._readStoredTokens();
+    const source = this._tokenSource;
+    if (tokenData && source === "pwa" && tokenData.refresh_token) {
+      try {
+        await fetch("/auth/token", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ action: "revoke", token: tokenData.refresh_token }).toString(),
+        });
+      } catch (_) {}
+    }
+    try {
+      localStorage.removeItem("homecave_pwa_tokens");
+      localStorage.removeItem("homecave_ha_tokens");
+    } catch (_) {}
+    this._memTokens = null;
+    this._tokenSource = null;
+    try {
+      if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: "CLEAR_AUTH_CACHE" });
+      }
+    } catch (_) {}
+    if (source === "ha") {
+      // `hassTokens` is Home Assistant's own session; it is never revoked from here.
+      this.showToast("Signed out of HomeCave. To end your Home Assistant session, sign out in Home Assistant.");
+      return;
+    }
+    window.location.replace(`${window.location.origin}/homecave/`);
   }
 
   _emptyForm() {
@@ -1298,15 +1375,15 @@ class HomeCaveMobileApp {
             : "";
 
         return `
-          <div class="bottle-card ${tastedMode ? "bottle-card-tasted" : ""}" data-wine-id="${w.id}">
-            <div class="bottle-thumb-wrap" data-detail-id="${w.id}" title="Tap to view wine details">
+          <div class="bottle-card ${tastedMode ? "bottle-card-tasted" : ""}" data-wine-id="${num(w.id)}">
+            <div class="bottle-thumb-wrap" data-detail-id="${num(w.id)}" title="Tap to view wine details">
               ${
                 safeImageUrl(w.image_url)
                   ? `<img src="${safeImageUrl(w.image_url)}" alt="${esc(w.name)}" />`
                   : `<span style="font-size:24px;">${tastedMode ? "🥂" : "🍷"}</span>`
               }
             </div>
-            <div class="bottle-card-main" data-detail-id="${w.id}">
+            <div class="bottle-card-main" data-detail-id="${num(w.id)}">
               <div class="bottle-meta-top">
                 ${
                   tastedMode
@@ -1347,7 +1424,7 @@ class HomeCaveMobileApp {
                 ${
                   rating
                     ? safeExternalUrl(w.vivino_url)
-                      ? `<a class="vivino-tag" href="${safeExternalUrl(w.vivino_url)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();">★ ${esc(rating)} ↗</a>`
+                      ? `<a class="vivino-tag" href="${safeExternalUrl(w.vivino_url)}" target="_blank" rel="noopener noreferrer">★ ${esc(rating)} ↗</a>`
                       : `<span class="vivino-tag">★ ${esc(rating)}</span>`
                     : ""
                 }
@@ -1367,16 +1444,16 @@ class HomeCaveMobileApp {
     const tastedTotal =
       stats.tasted_wines ?? this.state.wines.filter((w) => this._isWineTasted(w)).length;
     const tabs = [
-      { id: "all", label: `In Stock (${stats.total_bottles || 0})` },
-      { id: "ready", label: `Ready (${stats.ready_to_drink_bottles || 0})` },
-      { id: "drink_soon", label: `Soon (${stats.drink_soon_bottles || 0})` },
-      { id: "keep", label: `Keep (${stats.keep_bottles || stats.hold_bottles || 0})` },
-      { id: "past_peak", label: `Past Peak (${stats.past_peak_bottles || 0})` },
-      { id: "red", label: `Red (${stats.by_type?.red || 0})` },
-      { id: "white", label: `White (${stats.by_type?.white || 0})` },
-      { id: "rose", label: `Rosé (${stats.by_type?.rose || 0})` },
-      { id: "sparkling", label: `Sparkling (${stats.by_type?.sparkling || 0})` },
-      { id: "tasted", label: `Tasted (${tastedTotal})` },
+      { id: "all", label: `In Stock (${num(stats.total_bottles)})` },
+      { id: "ready", label: `Ready (${num(stats.ready_to_drink_bottles)})` },
+      { id: "drink_soon", label: `Soon (${num(stats.drink_soon_bottles)})` },
+      { id: "keep", label: `Keep (${num(stats.keep_bottles || stats.hold_bottles)})` },
+      { id: "past_peak", label: `Past Peak (${num(stats.past_peak_bottles)})` },
+      { id: "red", label: `Red (${num(stats.by_type?.red)})` },
+      { id: "white", label: `White (${num(stats.by_type?.white)})` },
+      { id: "rose", label: `Rosé (${num(stats.by_type?.rose)})` },
+      { id: "sparkling", label: `Sparkling (${num(stats.by_type?.sparkling)})` },
+      { id: "tasted", label: `Tasted (${num(tastedTotal)})` },
     ];
 
     return `
@@ -1671,13 +1748,13 @@ class HomeCaveMobileApp {
 
     const kpi = (value, label, color = "") => `
       <div class="kpi-card">
-        <div class="kpi-value" ${color ? `style="color:${color};"` : ""}>${value}</div>
+        <div class="kpi-value" ${color ? `style="color:${esc(color)};"` : ""}>${esc(value)}</div>
         <div class="kpi-label">${esc(label)}</div>
       </div>`;
 
     const wineLink = (w, sub) =>
       w
-        ? `<button class="highlight-row" data-detail-id="${w.id}">
+        ? `<button class="highlight-row" data-detail-id="${num(w.id)}">
             <span class="highlight-main">
               <strong>${esc(w.winery)} – ${esc(w.name)}</strong>
               <small>${esc(sub)}</small>
@@ -1964,6 +2041,9 @@ class HomeCaveMobileApp {
             <a class="btn" href="/" style="width:100%;">
               🏠 Return to Home Assistant UI
             </a>
+            <button type="button" class="btn" id="btn-settings-sign-out" style="width:100%;">
+              🚪 Sign out
+            </button>
           </div>
         </div>
 
@@ -2042,7 +2122,7 @@ class HomeCaveMobileApp {
           ${
             this.state.sommAiPendingImage
               ? `<div class="sommai-pending-img-bar">
-                  <img src="${this.state.sommAiPendingImage}" class="sommai-pending-thumb" alt="Dish photo" />
+                  <img src="${safeImageUrl(this.state.sommAiPendingImage)}" class="sommai-pending-thumb" alt="Dish photo" />
                   <span class="sommai-pending-label">Dish photo attached</span>
                   <button type="button" class="btn btn-icon btn-sm" id="btn-clear-sommai-img" title="Remove photo">✕</button>
                 </div>`
@@ -2075,7 +2155,7 @@ class HomeCaveMobileApp {
       return `
         <div class="sommai-msg sommai-msg-user">
           <div class="sommai-msg-bubble">
-            ${m.image_data ? `<img src="${m.image_data}" class="sommai-user-img" alt="Dish photo" />` : ""}
+            ${safeImageUrl(m.image_data) ? `<img src="${safeImageUrl(m.image_data)}" class="sommai-user-img" alt="Dish photo" />` : ""}
             <div>${esc(m.text || "Pair this dish with wine")}</div>
           </div>
         </div>
@@ -2123,11 +2203,11 @@ class HomeCaveMobileApp {
                             ? "vintage"
                             : "hold";
                       return `
-                        <div class="sommai-rec-card" ${rec.wine_id ? `data-detail-id="${rec.wine_id}"` : ""}>
+                        <div class="sommai-rec-card" ${Number.isInteger(num(rec.wine_id)) && num(rec.wine_id) > 0 ? `data-detail-id="${num(rec.wine_id)}"` : ""}>
                           <div class="sommai-rec-top">
                             <span class="pill pill-${matchClass}">${matchLabel}</span>
                             ${rec.serving_temp_c ? `<span class="pill pill-vintage">🌡️ ${esc(rec.serving_temp_c)}</span>` : ""}
-                            ${rec.decant_minutes ? `<span class="pill pill-vintage">⏳ Decant ${rec.decant_minutes}m</span>` : ""}
+                            ${Math.round(num(rec.decant_minutes)) > 0 ? `<span class="pill pill-vintage">⏳ Decant ${Math.round(num(rec.decant_minutes))}m</span>` : ""}
                           </div>
                           <div class="sommai-rec-title">
                             <strong>${esc(rec.wine_title)}</strong>
@@ -2242,7 +2322,7 @@ class HomeCaveMobileApp {
                 </div>
                 <div class="import-progress-status-text" style="font-size:12.5px; color:var(--text-muted); margin-top:10px; line-height:1.45;">
                   <strong>Status:</strong> ${esc(p.status_message || (isDone ? "Done!" : "Working…"))}
-                  ${p.total_bottles ? `<div style="margin-top:2px;">Bottles: ${p.current_bottle || 0} / ${p.total_bottles}</div>` : ""}
+                  ${p.total_bottles ? `<div style="margin-top:2px;">Bottles: ${num(p.current_bottle)} / ${num(p.total_bottles)}</div>` : ""}
                 </div>
               </div>
 
@@ -2518,7 +2598,7 @@ class HomeCaveMobileApp {
                           .map(
                             (b) => `
                             <div style="padding:9px 11px; border-radius:10px; background:var(--surface-alt); font-size:12.5px;">
-                              <strong>+${b.quantity_added} bottle(s)</strong> (${b.quantity_remaining} left) • ${esc(fmtDate(b.added_at))}<br/>
+                              <strong>+${num(b.quantity_added)} bottle(s)</strong> (${num(b.quantity_remaining)} left) • ${esc(fmtDate(b.added_at))}<br/>
                               Bought at: <strong>${esc(b.purchase_location || "—")}</strong> • Area: <strong>${esc(b.storage_location || "—")}</strong>
                             </div>
                           `
@@ -2943,6 +3023,10 @@ class HomeCaveMobileApp {
   }
 
   _bindBottleCardEvents(scope) {
+    // External Vivino links inside a card must not also open the wine detail sheet.
+    scope.querySelectorAll(".bottle-card a.vivino-tag").forEach((el) => {
+      el.addEventListener("click", (e) => e.stopPropagation());
+    });
     scope.querySelectorAll("[data-detail-id]").forEach((el) => {
       el.addEventListener("click", () => this.openDetail(Number(el.dataset.detailId)));
     });
@@ -3166,6 +3250,7 @@ class HomeCaveMobileApp {
     r.querySelectorAll("[data-set-theme]").forEach((b) => {
       b.addEventListener("click", () => this.setTheme(b.dataset.setTheme));
     });
+    r.querySelector("#btn-settings-sign-out")?.addEventListener("click", () => this.signOut());
     r.querySelector("#btn-settings-refresh-vivino")?.addEventListener("click", async () => {
       try {
         this.showToast("Refreshing Vivino ratings…");
@@ -3570,7 +3655,7 @@ class HomeCaveMobileApp {
       const total = prog.total_bottles || prog.total || 0;
       const current = prog.current_bottle || prog.current || 0;
       statusDiv.innerHTML = `<strong>Status:</strong> ${esc(msg)}${
-        total ? `<div style="margin-top:4px; font-weight:600; color:var(--text);">Bottle ${current} / ${total}</div>` : ""
+        total ? `<div style="margin-top:4px; font-weight:600; color:var(--text);">Bottle ${num(current)} / ${num(total)}</div>` : ""
       }`;
     }
   }

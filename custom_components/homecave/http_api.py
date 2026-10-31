@@ -41,12 +41,51 @@ from .const import (
     BACKUPS_SUBDIR,
     DOMAIN,
     EXPORTS_SUBDIR,
+    MAX_IMAGE_DATA_URI_CHARS,
+    MAX_IMPORT_PAYLOAD_CHARS,
+    MAX_SOMMELIER_MESSAGE_CHARS,
     MOBILE_APP_URL_BASE,
     VERSION,
 )
 from .coordinator import WineInventoryCoordinator
+from .scanner import LLMScannerError
 
 _LOGGER = logging.getLogger(__name__)
+
+# Actions that change or expose the whole cellar are restricted to Home Assistant admins
+# (matches the admin-only WebSocket commands and services).
+ADMIN_POST_ACTIONS: frozenset[str] = frozenset({"backup_create", "import", "delete"})
+# Exceptions whose messages are authored by HomeCave and safe to show to the user.
+USER_FACING_ERRORS: tuple[type[BaseException], ...] = (
+    ValueError,
+    PermissionError,
+    FileNotFoundError,
+    KeyError,
+    LLMScannerError,
+)
+MAX_ACTION_NAME_CHARS = 40
+
+
+def _is_admin(user: Any | None) -> bool:
+    return bool(user is not None and getattr(user, "is_admin", False))
+
+
+def _public_error_message(err: BaseException) -> str:
+    """Return a short client-safe error message (internals stay in the HA log)."""
+    if isinstance(err, KeyError):
+        return f"Missing required field: {str(err)[:60]}"
+    if isinstance(err, USER_FACING_ERRORS):
+        return " ".join(str(err).split())[:300]
+    return "Request failed. See the Home Assistant logs for details."
+
+
+def _safe_action(action: Any) -> str:
+    """Sanitize a URL path segment before logging it (prevents log injection)."""
+    return "".join(ch for ch in str(action)[:MAX_ACTION_NAME_CHARS] if ch.isalnum() or ch in "_-")
+
+
+def _too_long(value: Any, limit: int) -> bool:
+    return isinstance(value, str) and len(value) > limit
 
 MOBILE_FRONTEND_DIR = Path(__file__).parent / "frontend" / "mobile"
 
@@ -127,8 +166,13 @@ async def async_handle_pwa_get(
     query: dict[str, Any],
     *,
     authenticated_user: str | None = None,
+    user: Any | None = None,
 ) -> tuple[int, dict[str, Any]]:
-    """Execute GET actions for the standalone mobile PWA."""
+    """Execute GET actions for the standalone mobile PWA.
+
+    ``user`` is the authenticated Home Assistant user. Backup listings (filenames and signed
+    download links) are only returned to admins; absolute server paths are never returned.
+    """
     coordinator = _resolve_coordinator(hass, query.get("entry_id"))
 
     if action == "state":
@@ -151,9 +195,17 @@ async def async_handle_pwa_get(
                 search=search,
             )
 
+        backups: list[dict[str, Any]] = []
+        if _is_admin(user):
+            backups = [
+                {k: v for k, v in b.items() if k != "file_path"}
+                for b in await coordinator.async_list_backups()
+            ]
+
         return 200, {
             "version": VERSION,
             "authenticated_user": authenticated_user or "",
+            "is_admin": _is_admin(user),
             "cellar_name": coordinator.cellar_name,
             "currency": coordinator.currency,
             "temperature_entity": coordinator.temperature_entity,
@@ -167,7 +219,7 @@ async def async_handle_pwa_get(
             "areas": _resolve_available_areas(hass, coordinator),
             "statistics": coordinator.statistics,
             "wines": wines,
-            "backups": await coordinator.async_list_backups(),
+            "backups": backups,
         }
 
     if action == "detail":
@@ -188,21 +240,41 @@ async def async_handle_pwa_get(
     if action == "import_progress":
         return 200, coordinator.get_import_progress()
 
-    return 404, {"error": f"Unknown GET action: {action}"}
+    return 404, {"error": f"Unknown GET action: {_safe_action(action)}"}
 
 
 async def async_handle_pwa_post(
     hass: HomeAssistant,
     action: str,
     payload: dict[str, Any],
+    *,
+    user: Any | None = None,
 ) -> tuple[int, dict[str, Any]]:
-    """Execute POST actions for the standalone mobile PWA."""
+    """Execute POST actions for the standalone mobile PWA.
+
+    ``user`` is the authenticated Home Assistant user making the request. Destructive or
+    whole-cellar actions (ADMIN_POST_ACTIONS) require an admin, mirroring the WebSocket API.
+    """
+    if action in ADMIN_POST_ACTIONS and not _is_admin(user):
+        return 403, {"error": "Administrator privileges are required for this action."}
+
+    # Request-size guards (memory / LLM-cost abuse)
+    if _too_long(payload.get("image_data"), MAX_IMAGE_DATA_URI_CHARS):
+        return 413, {"error": "Image is too large (maximum 10 MB)."}
+    for key in ("message", "query", "dish_description"):
+        if _too_long(payload.get(key), MAX_SOMMELIER_MESSAGE_CHARS):
+            return 413, {"error": f"Message is too long (maximum {MAX_SOMMELIER_MESSAGE_CHARS} characters)."}
+    for key in ("content", "payload", "source"):
+        if _too_long(payload.get(key), MAX_IMPORT_PAYLOAD_CHARS):
+            return 413, {"error": "Import file is too large (maximum 50 MB)."}
+
     coordinator = _resolve_coordinator(hass, payload.get("entry_id"))
 
     if action == "scan":
         res = await coordinator.async_scan_bottle(
             image_data=payload.get("image_data"),
             camera_entity_id=payload.get("camera_entity_id"),
+            user=user,
         )
         return 200, res
 
@@ -223,6 +295,11 @@ async def async_handle_pwa_post(
     if action == "delete":
         wine_id = int(payload["wine_id"])
         deleted = await coordinator.async_delete_wine(wine_id)
+        _LOGGER.warning(
+            "HomeCave audit: wine %s deleted via mobile app by user %s",
+            wine_id,
+            getattr(user, "id", "unknown"),
+        )
         return 200, {"deleted": deleted, "statistics": coordinator.statistics}
 
     if action == "research":
@@ -249,6 +326,11 @@ async def async_handle_pwa_post(
 
     if action == "backup_create":
         res = await coordinator.async_create_backup()
+        _LOGGER.warning(
+            "HomeCave audit: backup created via mobile app by user %s",
+            getattr(user, "id", "unknown"),
+        )
+        res = {k: v for k, v in res.items() if k != "file_path"}
         return 200, {
             "ok": True,
             "backup": res,
@@ -265,14 +347,20 @@ async def async_handle_pwa_post(
         )
         image_data = payload.get("image_data")
         history = payload.get("history") or []
+        if not isinstance(history, list):
+            history = []
         res = await coordinator.async_sommelier_chat(
-            query_text=query_text,
+            query_text=str(query_text),
             image_data=image_data,
-            conversation_history=history,
+            conversation_history=history[-10:],
         )
         return 200, res
 
     if action == "import":
+        _LOGGER.warning(
+            "HomeCave audit: cellar import via mobile app by user %s",
+            getattr(user, "id", "unknown"),
+        )
         fmt = str(payload.get("format") or payload.get("format_type") or "auto").lower()
         content = payload.get("content") or payload.get("payload") or payload.get("source") or ""
         enrich_ai = bool(payload.get("enrich_ai", True))
@@ -308,7 +396,7 @@ async def async_handle_pwa_post(
         res = await coordinator.async_import_wines(content, format_type=fmt)
         return 200, {**res, "statistics": coordinator.statistics}
 
-    return 404, {"error": f"Unknown POST action: {action}"}
+    return 404, {"error": f"Unknown POST action: {_safe_action(action)}"}
 
 
 class WineInventoryMobileAssetView(HomeAssistantView):
@@ -368,12 +456,14 @@ class WineInventoryMobileAssetView(HomeAssistantView):
         if file_path.suffix.lower() == ".html":
             headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
-                "img-src 'self' data: blob: https://*.vivino.com https://images.vivino.com; "
+                "img-src 'self' data: blob: https://images.vivino.com; "
                 "style-src 'self' 'unsafe-inline'; "
-                "script-src 'self' 'unsafe-inline'; "
+                "script-src 'self'; "
                 "connect-src 'self'; "
+                "object-src 'none'; "
                 "frame-ancestors 'self'; "
-                "base-uri 'self'"
+                "base-uri 'self'; "
+                "form-action 'self'"
             )
         if clean_name == "sw.js":
             headers["Service-Worker-Allowed"] = "/homecave/"
@@ -411,6 +501,13 @@ class WineInventoryPwaApiView(HomeAssistantView):
         except (ImportError, KeyError):
             return request.app["hass"]
 
+    def _json_no_store(self, data: Any, status_code: int) -> web.Response:
+        """Return JSON with Cache-Control: no-store (authenticated, user-specific data)."""
+        response = self.json(data, status_code=status_code)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
     async def get(self, request: web.Request, action: str) -> web.Response:
         """Handle authenticated GET requests from the mobile PWA."""
         try:
@@ -422,24 +519,32 @@ class WineInventoryPwaApiView(HomeAssistantView):
                 action,
                 dict(request.query),
                 authenticated_user=user_name,
+                user=hass_user,
             )
-            return self.json(data, status_code=status)
+            return self._json_no_store(data, status)
         except Exception as err:  # noqa: BLE001
-            _LOGGER.exception("Mobile PWA GET %s failed: %s", action, err)
-            return self.json({"error": str(err)}, status_code=500)
+            _LOGGER.exception("Mobile PWA GET %r failed", _safe_action(action))
+            status = 400 if isinstance(err, USER_FACING_ERRORS) else 500
+            return self._json_no_store({"error": _public_error_message(err)}, status)
 
     async def post(self, request: web.Request, action: str) -> web.Response:
         """Handle authenticated POST requests from the mobile PWA."""
         try:
             hass = self._get_hass(request)
+            hass_user = request.get("hass_user")
             payload = await request.json() if request.can_read_body else {}
+            if not isinstance(payload, dict):
+                return self._json_no_store({"error": "JSON object body required."}, 400)
             status, data = await async_handle_pwa_post(
-                hass, action, dict(payload or {})
+                hass, action, dict(payload or {}), user=hass_user
             )
-            return self.json(data, status_code=status)
+            return self._json_no_store(data, status)
         except Exception as err:  # noqa: BLE001
-            _LOGGER.exception("Mobile PWA POST %s failed: %s", action, err)
-            return self.json({"error": str(err)}, status_code=500)
+            _LOGGER.exception("Mobile PWA POST %r failed", _safe_action(action))
+            status = 400 if isinstance(err, USER_FACING_ERRORS) else 500
+            if isinstance(err, PermissionError):
+                status = 403
+            return self._json_no_store({"error": _public_error_message(err)}, status)
 
 
 class WineInventoryDownloadView(HomeAssistantView):

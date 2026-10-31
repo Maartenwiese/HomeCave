@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 try:
@@ -33,6 +34,24 @@ except ImportError:  # pragma: no cover - allows standalone unit test imports
             def Coerce(typ: Any) -> Any:
                 return typ
 
+            @staticmethod
+            def All(*args: Any) -> Any:
+                return args[0] if args else None
+
+            @staticmethod
+            def Length(**kwargs: Any) -> Any:
+                return None
+
+            @staticmethod
+            def Range(**kwargs: Any) -> Any:
+                return None
+
+            @staticmethod
+            def Match(pattern: Any, **kwargs: Any) -> Any:
+                return str
+
+            Invalid = ValueError
+
         vol = _StubVol()  # type: ignore[assignment]
     HomeAssistant = Any  # type: ignore[assignment,misc]
 
@@ -59,8 +78,70 @@ except ImportError:  # pragma: no cover - allows standalone unit test imports
 
     websocket_api = _StubWebsocketApi()  # type: ignore[assignment]
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    MAX_IMAGE_DATA_URI_CHARS,
+    MAX_IMPORT_PAYLOAD_CHARS,
+    MAX_SHORT_TEXT_CHARS,
+    MAX_SOMMELIER_MESSAGE_CHARS,
+    MAX_TEXT_FIELD_CHARS,
+)
 from .coordinator import WineInventoryCoordinator
+from .scanner import LLMScannerError
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _bounded_str(max_len: int) -> Any:
+    """Voluptuous validator for a string with a maximum length (falls back to str in stubs)."""
+    if hasattr(vol, "All") and hasattr(vol, "Length"):
+        return vol.All(str, vol.Length(max=max_len))
+    return str
+
+
+_SHORT_STR = _bounded_str(MAX_SHORT_TEXT_CHARS)
+_TEXT_STR = _bounded_str(MAX_TEXT_FIELD_CHARS)
+_URL_STR = _bounded_str(2048)
+_MESSAGE_STR = _bounded_str(MAX_SOMMELIER_MESSAGE_CHARS)
+_IMAGE_STR = _bounded_str(MAX_IMAGE_DATA_URI_CHARS)
+_ARCHIVE_STR = _bounded_str(MAX_IMPORT_PAYLOAD_CHARS)
+_WINE_ID = (
+    vol.All(int, vol.Range(min=1)) if hasattr(vol, "All") and hasattr(vol, "Range") else int
+)
+
+_USER_FACING_ERRORS: tuple[type[BaseException], ...] = (
+    ValueError,
+    PermissionError,
+    FileNotFoundError,
+    LLMScannerError,
+)
+
+
+def _ws_error_message(err: BaseException) -> str:
+    """Return a client-safe error message; unexpected exceptions stay in the HA log."""
+    if isinstance(err, _USER_FACING_ERRORS):
+        return " ".join(str(err).split())[:300]
+    _LOGGER.exception("HomeCave WebSocket command failed", exc_info=err)
+    return "Request failed. See the Home Assistant logs for details."
+
+
+def _bounded_updates(value: Any) -> Any:
+    """Reject oversized update payloads (field count, string length, image data size)."""
+    if not isinstance(value, dict):
+        raise vol.Invalid("updates must be an object")
+    if len(value) > 60:
+        raise vol.Invalid("too many fields in updates")
+    for key, item in value.items():
+        if not isinstance(key, str) or len(key) > 64:
+            raise vol.Invalid("invalid update field name")
+        limit = MAX_IMAGE_DATA_URI_CHARS if key == "image_data" else MAX_TEXT_FIELD_CHARS
+        if isinstance(item, str) and len(item) > limit:
+            raise vol.Invalid(f"field '{key}' is too long")
+        if isinstance(item, (list, dict)) and len(item) > 100:
+            raise vol.Invalid(f"field '{key}' has too many items")
+        if item is not None and not isinstance(item, (str, int, float, bool, list)):
+            raise vol.Invalid(f"field '{key}' has an unsupported type")
+    return value
 
 
 def _require_admin_user(connection: Any, msg: dict[str, Any]) -> bool:
@@ -112,10 +193,10 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "homecave/list",
-        vol.Optional("entry_id"): str,
+        vol.Optional("entry_id"): _SHORT_STR,
         vol.Optional("include_out_of_stock", default=True): bool,
-        vol.Optional("wine_type"): vol.Any(str, None),
-        vol.Optional("search"): vol.Any(str, None),
+        vol.Optional("wine_type"): vol.Any(_SHORT_STR, None),
+        vol.Optional("search"): vol.Any(_SHORT_STR, None),
     }
 )
 @websocket_api.async_response
@@ -146,14 +227,14 @@ async def ws_list_wines(
             },
         )
     except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "list_failed", str(err))
+        connection.send_error(msg["id"], "list_failed", _ws_error_message(err))
 
 
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "homecave/get_detail",
-        vol.Required("wine_id"): int,
-        vol.Optional("entry_id"): str,
+        vol.Required("wine_id"): _WINE_ID,
+        vol.Optional("entry_id"): _SHORT_STR,
     }
 )
 @websocket_api.async_response
@@ -174,15 +255,15 @@ async def ws_get_wine_detail(
             return
         connection.send_result(msg["id"], {"wine": detail})
     except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "detail_failed", str(err))
+        connection.send_error(msg["id"], "detail_failed", _ws_error_message(err))
 
 
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "homecave/scan_bottle",
-        vol.Optional("image_data"): vol.Any(None, str),
-        vol.Optional("camera_entity_id"): str,
-        vol.Optional("entry_id"): str,
+        vol.Optional("image_data"): vol.Any(None, _IMAGE_STR),
+        vol.Optional("camera_entity_id"): _TEXT_STR,
+        vol.Optional("entry_id"): _SHORT_STR,
     }
 )
 @websocket_api.async_response
@@ -197,47 +278,48 @@ async def ws_scan_bottle(
         result = await coordinator.async_scan_bottle(
             image_data=msg.get("image_data"),
             camera_entity_id=msg.get("camera_entity_id"),
+            user=getattr(connection, "user", None),
         )
         connection.send_result(msg["id"], result)
     except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "scan_failed", str(err))
+        connection.send_error(msg["id"], "scan_failed", _ws_error_message(err))
 
 
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "homecave/add_wine",
         vol.Optional("wine_id"): vol.Any(int, None),
-        vol.Required("winery"): str,
-        vol.Required("name"): str,
+        vol.Required("winery"): _SHORT_STR,
+        vol.Required("name"): _SHORT_STR,
         vol.Optional("vintage"): vol.Any(int, None),
-        vol.Optional("wine_type", default="red"): str,
-        vol.Optional("varietal", default=""): str,
-        vol.Optional("region", default=""): str,
-        vol.Optional("country", default=""): str,
+        vol.Optional("wine_type", default="red"): _SHORT_STR,
+        vol.Optional("varietal", default=""): _SHORT_STR,
+        vol.Optional("region", default=""): _SHORT_STR,
+        vol.Optional("country", default=""): _SHORT_STR,
         vol.Optional("alcohol_pct"): vol.Any(float, int, None),
-        vol.Optional("bottle_size_ml", default=750): int,
+        vol.Optional("bottle_size_ml", default=750): vol.All(int, vol.Range(min=50, max=30000)),
         vol.Optional("vivino_rating"): vol.Any(float, int, None),
         vol.Optional("vivino_ratings_count"): vol.Any(int, None),
-        vol.Optional("vivino_url", default=""): str,
+        vol.Optional("vivino_url", default=""): _URL_STR,
         vol.Optional("vivino_price_estimate"): vol.Any(float, int, None),
-        vol.Optional("rating_source", default=""): str,
+        vol.Optional("rating_source", default=""): _SHORT_STR,
         vol.Optional("vivino_wine_id"): vol.Any(int, None),
-        vol.Optional("vivino_match_confidence", default=""): str,
+        vol.Optional("vivino_match_confidence", default=""): _SHORT_STR,
         vol.Optional("drink_from_year"): vol.Any(int, None),
         vol.Optional("drink_until_year"): vol.Any(int, None),
-        vol.Optional("drink_window_note", default=""): str,
-        vol.Optional("food_pairings"): vol.Any(list, str, None),
-        vol.Optional("general_notes", default=""): str,
+        vol.Optional("drink_window_note", default=""): _TEXT_STR,
+        vol.Optional("food_pairings"): vol.Any(vol.All(list, vol.Length(max=50)), _TEXT_STR, None),
+        vol.Optional("general_notes", default=""): _TEXT_STR,
         vol.Optional("personal_rating"): vol.Any(float, int, None),
-        vol.Optional("image_url", default=""): str,
-        vol.Optional("quantity", default=1): int,
-        vol.Optional("added_at"): vol.Any(str, None),
-        vol.Optional("purchase_location", default=""): str,
+        vol.Optional("image_url", default=""): _URL_STR,
+        vol.Optional("quantity", default=1): vol.All(int, vol.Range(min=0, max=10000)),
+        vol.Optional("added_at"): vol.Any(_SHORT_STR, None),
+        vol.Optional("purchase_location", default=""): _SHORT_STR,
         vol.Optional("purchase_price"): vol.Any(float, int, None),
-        vol.Optional("storage_location", default=""): str,
-        vol.Optional("batch_notes", default=""): str,
+        vol.Optional("storage_location", default=""): _SHORT_STR,
+        vol.Optional("batch_notes", default=""): _TEXT_STR,
         vol.Optional("as_tasted", default=False): bool,
-        vol.Optional("entry_id"): str,
+        vol.Optional("entry_id"): _SHORT_STR,
     }
 )
 @websocket_api.async_response
@@ -255,23 +337,23 @@ async def ws_add_wine(
             {"wine": wine, "statistics": coordinator.statistics},
         )
     except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "add_failed", str(err))
+        connection.send_error(msg["id"], "add_failed", _ws_error_message(err))
 
 
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "homecave/adjust_quantity",
-        vol.Required("wine_id"): int,
-        vol.Required("delta"): int,
+        vol.Required("wine_id"): _WINE_ID,
+        vol.Required("delta"): vol.All(int, vol.Range(min=-1000, max=1000)),
         vol.Optional("batch_id"): vol.Any(int, None),
-        vol.Optional("added_at"): vol.Any(str, None),
-        vol.Optional("purchase_location", default=""): str,
+        vol.Optional("added_at"): vol.Any(_SHORT_STR, None),
+        vol.Optional("purchase_location", default=""): _SHORT_STR,
         vol.Optional("purchase_price"): vol.Any(float, int, None),
-        vol.Optional("storage_location", default=""): str,
-        vol.Optional("drink_window_note", default=""): str,
-        vol.Optional("notes", default=""): str,
+        vol.Optional("storage_location", default=""): _SHORT_STR,
+        vol.Optional("drink_window_note", default=""): _TEXT_STR,
+        vol.Optional("notes", default=""): _TEXT_STR,
         vol.Optional("personal_rating"): vol.Any(float, int, None),
-        vol.Optional("entry_id"): str,
+        vol.Optional("entry_id"): _SHORT_STR,
     }
 )
 @websocket_api.async_response
@@ -289,15 +371,15 @@ async def ws_adjust_quantity(
             {"wine": wine, "statistics": coordinator.statistics},
         )
     except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "adjust_failed", str(err))
+        connection.send_error(msg["id"], "adjust_failed", _ws_error_message(err))
 
 
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "homecave/update_wine",
-        vol.Required("wine_id"): int,
-        vol.Required("updates"): dict,
-        vol.Optional("entry_id"): str,
+        vol.Required("wine_id"): _WINE_ID,
+        vol.Required("updates"): vol.All(dict, _bounded_updates),
+        vol.Optional("entry_id"): _SHORT_STR,
     }
 )
 @websocket_api.async_response
@@ -318,23 +400,26 @@ async def ws_update_wine(
             {"wine": wine, "statistics": coordinator.statistics},
         )
     except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "update_failed", str(err))
+        connection.send_error(msg["id"], "update_failed", _ws_error_message(err))
 
 
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "homecave/delete_wine",
-        vol.Required("wine_id"): int,
-        vol.Optional("entry_id"): str,
+        vol.Required("wine_id"): _WINE_ID,
+        vol.Optional("entry_id"): _SHORT_STR,
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_delete_wine(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Delete a wine record permanently."""
+    """Delete a wine record permanently (Home Assistant admins only)."""
+    if not _require_admin_user(connection, msg):
+        return
     try:
         coordinator = _get_coordinator(hass, msg.get("entry_id"))
         deleted = await coordinator.async_delete_wine(int(msg["wine_id"]))
@@ -343,14 +428,14 @@ async def ws_delete_wine(
             {"deleted": deleted, "statistics": coordinator.statistics},
         )
     except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "delete_failed", str(err))
+        connection.send_error(msg["id"], "delete_failed", _ws_error_message(err))
 
 
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "homecave/unlink_vivino",
-        vol.Required("wine_id"): int,
-        vol.Optional("entry_id"): str,
+        vol.Required("wine_id"): _WINE_ID,
+        vol.Optional("entry_id"): _SHORT_STR,
     }
 )
 @websocket_api.async_response
@@ -368,15 +453,15 @@ async def ws_unlink_vivino(
             {"wine": wine, "statistics": coordinator.statistics},
         )
     except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "unlink_failed", str(err))
+        connection.send_error(msg["id"], "unlink_failed", _ws_error_message(err))
 
 
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "homecave/link_vivino_url",
-        vol.Required("wine_id"): int,
-        vol.Required("url"): str,
-        vol.Optional("entry_id"): str,
+        vol.Required("wine_id"): _WINE_ID,
+        vol.Required("url"): _URL_STR,
+        vol.Optional("entry_id"): _SHORT_STR,
     }
 )
 @websocket_api.async_response
@@ -391,14 +476,14 @@ async def ws_link_vivino_url(
         result = await coordinator.async_link_vivino_url(int(msg["wine_id"]), str(msg["url"]))
         connection.send_result(msg["id"], {**result, "statistics": coordinator.statistics})
     except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "link_failed", str(err))
+        connection.send_error(msg["id"], "link_failed", _ws_error_message(err))
 
 
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "homecave/research_wine",
-        vol.Required("wine_id"): int,
-        vol.Optional("entry_id"): str,
+        vol.Required("wine_id"): _WINE_ID,
+        vol.Optional("entry_id"): _SHORT_STR,
     }
 )
 @websocket_api.async_response
@@ -413,14 +498,14 @@ async def ws_research_wine(
         result = await coordinator.async_research_wine(int(msg["wine_id"]))
         connection.send_result(msg["id"], result)
     except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "research_failed", str(err))
+        connection.send_error(msg["id"], "research_failed", _ws_error_message(err))
 
 
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "homecave/refresh_vivino",
         vol.Optional("wine_id"): vol.Any(int, None),
-        vol.Optional("entry_id"): str,
+        vol.Optional("entry_id"): _SHORT_STR,
     }
 )
 @websocket_api.async_response
@@ -435,13 +520,13 @@ async def ws_refresh_vivino(
         res = await coordinator.async_refresh_vivino(msg.get("wine_id"))
         connection.send_result(msg["id"], res)
     except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "vivino_refresh_failed", str(err))
+        connection.send_error(msg["id"], "vivino_refresh_failed", _ws_error_message(err))
 
 
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "homecave/create_backup",
-        vol.Optional("entry_id"): str,
+        vol.Optional("entry_id"): _SHORT_STR,
     }
 )
 @websocket_api.require_admin
@@ -466,17 +551,17 @@ async def ws_create_backup(
             res["archive_base64"] = base64.b64encode(raw_bytes).decode("ascii")
         connection.send_result(msg["id"], res)
     except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "backup_failed", str(err))
+        connection.send_error(msg["id"], "backup_failed", _ws_error_message(err))
 
 
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "homecave/restore_backup",
-        vol.Optional("file_path"): str,
-        vol.Optional("backup_filename"): str,
-        vol.Optional("zip_data"): str,
-        vol.Optional("archive_base64"): str,
-        vol.Optional("entry_id"): str,
+        vol.Optional("file_path"): _SHORT_STR,
+        vol.Optional("backup_filename"): _SHORT_STR,
+        vol.Optional("zip_data"): _ARCHIVE_STR,
+        vol.Optional("archive_base64"): _ARCHIVE_STR,
+        vol.Optional("entry_id"): _SHORT_STR,
     }
 )
 @websocket_api.require_admin
@@ -507,18 +592,18 @@ async def ws_restore_backup(
 
         connection.send_result(msg["id"], res)
     except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "restore_failed", str(err))
+        connection.send_error(msg["id"], "restore_failed", _ws_error_message(err))
 
 
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "homecave/import_wines",
-        vol.Optional("source"): str,
-        vol.Optional("file_data"): str,
-        vol.Optional("wines"): list,
-        vol.Optional("payload"): vol.Any(str, list, dict),
-        vol.Optional("format_type"): str,
-        vol.Optional("entry_id"): str,
+        vol.Optional("source"): _ARCHIVE_STR,
+        vol.Optional("file_data"): _ARCHIVE_STR,
+        vol.Optional("wines"): vol.All(list, vol.Length(max=20000)),
+        vol.Optional("payload"): vol.Any(_ARCHIVE_STR, vol.All(list, vol.Length(max=20000)), dict),
+        vol.Optional("format_type"): _SHORT_STR,
+        vol.Optional("entry_id"): _SHORT_STR,
     }
 )
 @websocket_api.require_admin
@@ -565,13 +650,13 @@ async def ws_import_wines(
 
         connection.send_result(msg["id"], res)
     except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "import_failed", str(err))
+        connection.send_error(msg["id"], "import_failed", _ws_error_message(err))
 
 
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "homecave/list_backups",
-        vol.Optional("entry_id"): str,
+        vol.Optional("entry_id"): _SHORT_STR,
     }
 )
 @websocket_api.require_admin
@@ -589,17 +674,17 @@ async def ws_list_backups(
         res = await coordinator.async_list_backups()
         connection.send_result(msg["id"], {"backups": res})
     except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "list_backups_failed", str(err))
+        connection.send_error(msg["id"], "list_backups_failed", _ws_error_message(err))
 
 
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "homecave/sommelier_chat",
-        vol.Optional("entry_id"): str,
-        vol.Optional("message"): str,
-        vol.Optional("query"): str,
-        vol.Optional("image_data"): vol.Any(None, str),
-        vol.Optional("history"): list,
+        vol.Optional("entry_id"): _SHORT_STR,
+        vol.Optional("message"): _MESSAGE_STR,
+        vol.Optional("query"): _MESSAGE_STR,
+        vol.Optional("image_data"): vol.Any(None, _IMAGE_STR),
+        vol.Optional("history"): vol.All(list, vol.Length(max=10)),
     }
 )
 @websocket_api.async_response
@@ -621,4 +706,4 @@ async def ws_sommelier_chat(
         )
         connection.send_result(msg["id"], res)
     except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "sommelier_chat_failed", str(err))
+        connection.send_error(msg["id"], "sommelier_chat_failed", _ws_error_message(err))
