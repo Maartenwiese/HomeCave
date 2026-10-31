@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+import re
 import struct
 import unittest
 import yaml
@@ -67,7 +68,7 @@ class TestStaticAntiMockingAndSchemas(unittest.TestCase):
         manifest = json.loads(manifest_text)
         self.assertEqual(manifest["domain"], "homecave")
         self.assertEqual(manifest["name"], "HomeCave")
-        self.assertEqual(manifest["version"], "0.9.1")
+        self.assertEqual(manifest["version"], "0.9.2")
         self.assertTrue(manifest["config_flow"])
         self.assertEqual(
             manifest["documentation"],
@@ -230,6 +231,88 @@ class TestStaticAntiMockingAndSchemas(unittest.TestCase):
         self.assertIn("AI Models", readme_txt)
         self.assertIn("Google Gemini", readme_txt)
         self.assertIn("Anthropic Claude", readme_txt)
+
+    def test_v092_hacs_default_store_readiness(self) -> None:
+        """Verify HACS publish/start, publish/integration, publish/python_script, and publish/action compliance."""
+        # 1. Single custom integration directory and zero python_scripts category conflict
+        cc_dirs = [p.name for p in (REPO_ROOT / "custom_components").iterdir() if p.is_dir()]
+        self.assertEqual(cc_dirs, ["homecave"])
+        self.assertFalse((REPO_ROOT / "python_scripts").exists())
+        root_py_files = list(REPO_ROOT.glob("*.py"))
+        self.assertEqual(root_py_files, [])
+
+        # 2. Strict hacs.json key compliance (publish/start/#hacsjson)
+        hacs_data = json.loads((REPO_ROOT / "hacs.json").read_text(encoding="utf-8"))
+        official_hacs_keys = {
+            "name",
+            "content_in_root",
+            "zip_release",
+            "filename",
+            "hide_default_branch",
+            "country",
+            "homeassistant",
+            "hacs",
+            "persistent_directory",
+        }
+        self.assertTrue(set(hacs_data.keys()).issubset(official_hacs_keys))
+        self.assertEqual(hacs_data["name"], "HomeCave")
+        if hacs_data.get("zip_release"):
+            self.assertTrue(bool(hacs_data.get("filename")))
+
+        # 3. Integration manifest categories & version synchronization
+        manifest = json.loads((INTEGRATION_DIR / "manifest.json").read_text(encoding="utf-8"))
+        for required_key in ("domain", "documentation", "issue_tracker", "codeowners", "name", "version"):
+            self.assertIn(required_key, manifest)
+        categories = manifest.get("categories")
+        self.assertIsInstance(categories, list)
+        self.assertGreaterEqual(len(categories), 1)
+        self.assertLessEqual(len(categories), 3)
+        self.assertEqual(len(categories), len(set(categories)))
+        for cat in categories:
+            self.assertRegex(cat, r"^[a-z0-9_]+(\.[a-z0-9_]+)?$")
+            parent, _, subcat = cat.partition(".")
+            if subcat:
+                self.assertNotIn(parent, categories)
+
+        const_txt = (INTEGRATION_DIR / "const.py").read_text(encoding="utf-8")
+        self.assertIn(f'VERSION: Final = "{manifest["version"]}"', const_txt)
+
+        # 4. Self-containment of custom_components/homecave/ (publish/integration/)
+        for asset_path in INTEGRATION_DIR.rglob("*"):
+            if not asset_path.is_file() or "__pycache__" in asset_path.parts:
+                continue
+            if asset_path.suffix not in {".py", ".js", ".json", ".yaml", ".html", ".css"}:
+                continue
+            body = asset_path.read_text(encoding="utf-8")
+            for forbidden_repo_path in ("../..", "dashboards/", "blueprints/", "assets/", "reports/"):
+                self.assertNotIn(
+                    forbidden_repo_path,
+                    body,
+                    f"Non-self-contained repo reference '{forbidden_repo_path}' in {asset_path}",
+                )
+
+        # 5. GitHub Actions validate.yml compliance (publish/action/ & publish/include/)
+        validate_wf = yaml.safe_load(
+            (REPO_ROOT / ".github" / "workflows" / "validate.yml").read_text(encoding="utf-8")
+        )
+        # PyYAML parses bare `on:` as boolean True in YAML 1.1
+        triggers = validate_wf.get("on") or validate_wf.get(True)
+        self.assertIsInstance(triggers, dict)
+        for req_trigger in ("push", "pull_request", "schedule", "workflow_dispatch"):
+            self.assertIn(req_trigger, triggers)
+        self.assertEqual(validate_wf.get("permissions"), {})
+
+        hacs_steps = validate_wf["jobs"]["hacs"]["steps"]
+        hacs_action_step = next(s for s in hacs_steps if str(s.get("uses", "")).startswith("hacs/action@"))
+        self.assertEqual(hacs_action_step["with"]["category"], "integration")
+        self.assertNotIn("ignore", hacs_action_step["with"])
+
+        # 6. README My Home Assistant one-click HACS badge (publish/start/#my-links)
+        readme_txt = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "https://my.home-assistant.io/redirect/hacs_repository/?owner=Maartenwiese&repository=HomeCave&category=integration",
+            readme_txt.replace("&amp;", "&"),
+        )
 
 
 if __name__ == "__main__":

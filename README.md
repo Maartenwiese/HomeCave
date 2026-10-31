@@ -8,9 +8,27 @@
   <strong>HomeCave - your local Wine Cellar · Home Assistant Wine Inventory, AI Bottle Label Scanner, SommAI Pairing &amp; Vivino Cellar Manager</strong>
 </p>
 
+<p align="center">
+  <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=Maartenwiese&amp;repository=HomeCave&amp;category=integration">
+    <img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open your Home Assistant instance and open a repository inside the Home Assistant Community Store." />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Maartenwiese/HomeCave/actions/workflows/validate.yml">
+    <img src="https://github.com/Maartenwiese/HomeCave/actions/workflows/validate.yml/badge.svg" alt="Validate (Hassfest, HACS &amp; Unit Tests)" />
+  </a>
+  <a href="https://github.com/Maartenwiese/HomeCave/releases/latest">
+    <img src="https://img.shields.io/github/v/release/Maartenwiese/HomeCave?label=Release" alt="Latest GitHub Release" />
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/github/license/Maartenwiese/HomeCave?label=License" alt="MIT License" />
+  </a>
+</p>
+
 ---
 
-**HomeCave** (`homecave`, version `0.9.1`) is a native Home Assistant custom integration, bundled Lovelace frontend card suite (`custom:homecave-card`, `custom:homecave-summary-card`, `custom:homecave-sommai-card`), and standalone Mobile Progressive Web App (`/homecave`) that keeps track of your local wine cellar. It stores your inventory in a local SQLite database (`<config>/homecave/homecave.db`), scans wine bottle photos using **AI vision models** (supporting both **Google Gemini** and **Anthropic Claude**), pairs dishes with your active cellar via **SommAI**, enriches bottles with **Vivino community ratings** and **AI sommelier research**, and tracks every addition with date/time added, where it was bought, physical storage location, drinking window (*Ready*, *Soon*, *Keep*, *Past Peak*), and tasting notes.
+**HomeCave** (`homecave`, version `0.9.2`) is a native Home Assistant custom integration, bundled Lovelace frontend card suite (`custom:homecave-card`, `custom:homecave-summary-card`, `custom:homecave-sommai-card`), and standalone Mobile Progressive Web App (`/homecave`) that keeps track of your local wine cellar. It stores your inventory in a local SQLite database (`<config>/homecave/homecave.db`), scans wine bottle photos using **AI vision models** (supporting both **Google Gemini** and **Anthropic Claude**), pairs dishes with your active cellar via **SommAI**, enriches bottles with **Vivino community ratings** and **AI sommelier research**, and tracks every addition with date/time added, where it was bought, physical storage location, drinking window (*Ready*, *Soon*, *Keep*, *Past Peak*), and tasting notes.
 
 Built following the [**`homeassistant-ai/skills`**](https://github.com/homeassistant-ai/skills) (`home-assistant-best-practices`) standards and 100% HACS &amp; Hassfest compliant.
 
@@ -51,13 +69,23 @@ Built following the [**`homeassistant-ai/skills`**](https://github.com/homeassis
 
 ### 1. Installing HomeCave via HACS
 
+#### Method A: HACS Store / One-Click Install (Recommended)
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Maartenwiese&repository=HomeCave&category=integration)
+
+1. Click the **Open HACS Repository** button above (or open **HACS** in your Home Assistant sidebar and search for **HomeCave**).
+2. Open **HomeCave** and click **Download** in the bottom-right corner (`v0.9.2` or newer).
+3. **Restart Home Assistant** (**Settings → System → Restart**) so Home Assistant loads the `homecave` integration.
+
+#### Method B: Custom Repository (Before HACS Default Store Inclusion)
+
 1. Open your Home Assistant UI and click **HACS** in the left sidebar.
 2. Click the **three dots (`⋮`)** in the top-right corner of HACS and select **Custom repositories**.
 3. Fill in the dialog:
    - **Repository**: `https://github.com/Maartenwiese/HomeCave`
    - **Type / Category**: Select **Integration**
 4. Click **Add**, then close the dialog.
-5. Search for **HomeCave** in HACS, open it, and click **Download** in the bottom-right corner. Confirm the download (`v0.9.1` or newer).
+5. Search for **HomeCave** in HACS, open it, and click **Download** in the bottom-right corner. Confirm the download (`v0.9.2` or newer).
 6. **Restart Home Assistant** (**Settings → System → Restart**) so Home Assistant loads the `homecave` integration.
 
 ---
@@ -94,7 +122,7 @@ Once Home Assistant has restarted:
    - Click **Create**.
 3. Open your new **HomeCave** dashboard from the left sidebar.
 4. Click **Edit Dashboard (pencil icon)** → **three dots (`⋮`)** → **Raw configuration editor**.
-5. Paste the contents of [`dashboards/homecave-dashboard.yaml`](dashboards/homecave-dashboard.yaml) and click **Save**.
+5. Paste the contents of [`dashboards/homecave-dashboard.yaml`](https://github.com/Maartenwiese/HomeCave/blob/main/dashboards/homecave-dashboard.yaml) *(hosted in this GitHub repository, since HACS extracts only `custom_components/homecave/` onto your Home Assistant host)* and click **Save**.
 
 #### Option B: Add a HomeCave Card to Any Existing Home Assistant Page
 1. Open any dashboard view, click **Edit (pencil)** → **+ Add Card**, and search for **HomeCave**:
@@ -137,3 +165,11 @@ Once Home Assistant has restarted:
    - Filter by drinking window readiness (**Ready**, **Soon**, **Keep**, **Past Peak**) or wine style, invert any sort column (`⇅`), and search across every field, batch location, tasting note, and AI research summary.
 3. **Backups, Restores &amp; Exports**:
    - Manage full `.zip` backups (`homecave_backup_<timestamp>.zip`), Vivino `.zip`/`.csv` imports, and CSV/JSON exports from **Settings → Devices &amp; Services → HomeCave → Configure** or via `homecave.create_backup`, `homecave.restore_backup`, `homecave.import_wines`, and `homecave.export_inventory`.
+
+---
+
+### 5. Optional Automation Blueprint (`cellar_alerts.yaml`)
+
+Because HACS installs only `custom_components/homecave/` onto your Home Assistant system, you can import the companion [`blueprints/automation/homecave/cellar_alerts.yaml`](https://github.com/Maartenwiese/HomeCave/blob/main/blueprints/automation/homecave/cellar_alerts.yaml) blueprint (low-stock alerts on `event.homecave_activity` &amp; weekly drinking-window digests) in one click:
+
+[![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FMaartenwiese%2FHomeCave%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fhomecave%2Fcellar_alerts.yaml)

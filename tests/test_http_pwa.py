@@ -298,16 +298,16 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
             "homeassistant",
             "hacs",
             "persistent_directory",
-            "render_readme",
         }
         self.assertTrue(set(hacs).issubset(allowed), set(hacs) - allowed)
         self.assertEqual(hacs["name"], "HomeCave")
         self.assertFalse(hacs.get("content_in_root", False))
         self.assertNotIn("zip_release", hacs)
+        self.assertNotIn("render_readme", hacs)
         self.assertRegex(hacs["homeassistant"], r"^\d{4}\.\d{1,2}\.\d+$")
         manifest = json.loads((INTEGRATION_DIR / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["codeowners"], ["@Maartenwiese"])
-        for key in ("domain", "name", "version", "documentation", "issue_tracker", "codeowners"):
+        for key in ("domain", "name", "categories", "version", "documentation", "issue_tracker", "codeowners"):
             self.assertIn(key, manifest)
 
     def test_v033_mobile_touch_first_stats_config_and_crop(self) -> None:
@@ -618,6 +618,7 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
             or '"version": "0.5.6"' in manifest_json
             or '"version": "0.5.7"' in manifest_json
             or '"version": "0.9.1"' in manifest_json
+            or '"version": "0.9.2"' in manifest_json
         )
         self.assertTrue(
             "v0.3.9" in app_js
@@ -631,6 +632,7 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
             or "v0.5.6" in app_js
             or "v0.5.7" in app_js
             or "v0.9.1" in app_js
+            or "v0.9.2" in app_js
         )
 
         # 2. Font scale defaults to 1.15 (Large)

@@ -3,7 +3,7 @@
  * Provides fast shell caching while keeping authenticated API requests strictly live.
  */
 
-const CACHE_NAME = "homecave-pwa-v0.9.1";
+const CACHE_NAME = "homecave-pwa-v0.9.2";
 const APP_SHELL = [
   "/homecave/index.html",
   "/homecave/styles.css",

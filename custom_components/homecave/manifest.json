@@ -1,6 +1,10 @@
 {
   "domain": "homecave",
   "name": "HomeCave",
+  "categories": [
+    "ai_voice.image_recognition",
+    "productivity_information.shopping_groceries"
+  ],
   "codeowners": ["@Maartenwiese"],
   "config_flow": true,
   "dependencies": ["frontend", "http"],
@@ -9,5 +13,5 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/Maartenwiese/HomeCave/issues",
   "requirements": [],
-  "version": "0.9.1"
+  "version": "0.9.2"
 }
