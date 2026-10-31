@@ -1,0 +1,373 @@
+# HomeCave — Home Assistant Local Wine Cellar Dashboard (Sections View Layout)
+# Grounded in https://github.com/homeassistant-ai/skills (references/dashboard-guide.md)
+# - Uses `type: sections` view with 12-column responsive `grid_options`
+# - Uses explicit `type: heading` cards with inline action button badges
+# - Uses `type: tile` cards for summary metrics and HomeCave environment
+# - Uses `type: distribution` card for Red / White / Rosé / Sparkling breakdown
+# - Uses `type: custom:homecave-card` for bottle scanning, Vivino ranking, +1/-1 stock, and notes
+# - Mobile-first: on phones the sections stack into one column with the inventory card on top
+# - Features multiple dedicated views: Cellar Overview, Tasted, SommAI Pairing, and Statistics
+
+title: HomeCave
+views:
+  - title: Cellar Overview
+    path: overview
+    type: sections
+    icon: mdi:view-dashboard
+    max_columns: 3
+    badges: []
+    sections:
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: HomeCave Inventory & Label Scanner
+            heading_style: title
+            icon: mdi:glass-wine
+            badges:
+              - type: button
+                icon: mdi:file-export-outline
+                tap_action:
+                  action: perform-action
+                  perform_action: homecave.export_inventory
+                  data:
+                    format: csv
+          - type: custom:homecave-card
+            title: HomeCave
+            default_view: list
+            grid_options:
+              columns: full
+              rows: auto
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: HomeCave Overview
+            heading_style: title
+            icon: mdi:glass-wine
+            badges:
+              - type: button
+                icon: mdi:refresh
+                tap_action:
+                  action: perform-action
+                  perform_action: homecave.refresh_vivino
+          - type: tile
+            grid_options:
+              columns: 6
+              rows: 1
+            entity: sensor.homecave_total_bottles
+            name: Total Stock
+            icon: mdi:glass-wine
+            color: red
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 6
+              rows: 1
+            entity: sensor.homecave_unique_wines
+            name: Unique Wines
+            icon: mdi:glass-wine
+            color: purple
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 6
+              rows: 1
+            entity: sensor.homecave_ready_to_drink
+            name: Ready to Drink
+            icon: mdi:check-decagram
+            color: green
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 6
+              rows: 1
+            entity: sensor.homecave_drink_soon
+            name: Drink Soon
+            icon: mdi:clock-alert-outline
+            color: amber
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 12
+              rows: 1
+            entity: sensor.homecave_estimated_value
+            name: Cellar Valuation
+            icon: mdi:cash-multiple
+            color: teal
+            vertical: false
+            features_position: bottom
+          - type: heading
+            heading: SommAI Food & Wine Pairing
+            heading_style: subtitle
+            icon: mdi:robot-excited-outline
+          - type: custom:homecave-sommai-card
+            title: SommAI Sommelier
+            grid_options:
+              columns: full
+              rows: auto
+          - type: heading
+            heading: Stock by Wine Style
+            heading_style: subtitle
+            icon: mdi:chart-pie
+          - type: distribution
+            title: Wine Style Breakdown
+            entities:
+              - entity: sensor.homecave_red_wine_bottles
+                name: Red
+                color: '#b71c1c'
+              - entity: sensor.homecave_white_wine_bottles
+                name: White
+                color: '#f57f17'
+              - entity: sensor.homecave_rose_wine_bottles
+                color: '#ec407a'
+                name: Rosé
+              - entity: sensor.homecave_sparkling_wine_bottles
+                name: Sparkling
+                color: '#0288d1'
+              - entity: sensor.homecave_dessert_fortified_bottles
+                name: Dessert / Fortified
+                color: '#6a1b9a'
+            grid_options:
+              columns: full
+              rows: auto
+      - type: grid
+        column_span: 3
+        cards:
+          - type: heading
+            heading: HomeCave Statistics & Drinking Windows
+            heading_style: title
+            icon: mdi:chart-timeline-variant-shimmer
+          - type: tile
+            grid_options:
+              columns: 3
+              rows: 1
+            entity: sensor.homecave_ready_to_drink
+            name: Ready to Drink
+            icon: mdi:check-decagram
+            color: green
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 3
+              rows: 1
+            entity: sensor.homecave_drink_soon
+            name: Drink Soon
+            icon: mdi:clock-alert-outline
+            color: amber
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 3
+              rows: 1
+            entity: sensor.homecave_keep_bottles
+            name: Keep / Aging
+            icon: mdi:archive-clock-outline
+            color: blue
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 3
+              rows: 1
+            entity: sensor.homecave_past_peak_bottles
+            name: Past Peak
+            icon: mdi:alert-outline
+            color: red
+            vertical: false
+            features_position: bottom
+          - type: custom:homecave-summary-card
+            title: Quick HomeCave & Mobile App Highlights
+            show_recent: true
+            show_style_bar: true
+            dashboard_path: /homecave-cellar/overview
+            grid_options:
+              columns: full
+              rows: auto
+
+  - title: Tasted
+    path: tasting-archive
+    type: sections
+    icon: mdi:glass-flute
+    max_columns: 2
+    badges: []
+    sections:
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Tasted Wine Log & Reviews
+            heading_style: subtitle
+            icon: mdi:star-box-multiple-outline
+          - type: custom:homecave-card
+            title: HomeCave Tasted
+            default_view: list
+            default_tab: tasted
+            grid_options:
+              columns: full
+              rows: auto
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Tasting History & Rating Notes
+            heading_style: subtitle
+            icon: mdi:history
+          - type: custom:homecave-card
+            title: Recent Tastings
+            default_tab: tasted
+            show_header: false
+            grid_options:
+              columns: full
+              rows: auto
+
+  - title: SommAI
+    path: sommai
+    type: sections
+    icon: mdi:robot
+    max_columns: 2
+    badges: []
+    sections:
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: SommAI AI Sommelier & HomeCave Pairing
+            heading_style: title
+            icon: mdi:robot-excited-outline
+          - type: custom:homecave-sommai-card
+            title: HomeCave SommAI
+            grid_options:
+              columns: full
+              rows: auto
+
+  - title: Statistics
+    path: statistics
+    type: sections
+    icon: mdi:chart-box-outline
+    max_columns: 2
+    badges: []
+    sections:
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: HomeCave Valuation & Capacity
+            heading_style: title
+            icon: mdi:finance
+          - type: tile
+            grid_options:
+              columns: 6
+              rows: 1
+            entity: sensor.homecave_total_bottles
+            name: Total Bottles
+            icon: mdi:glass-wine
+            color: red
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 6
+              rows: 1
+            entity: sensor.homecave_unique_wines
+            name: Unique Wines
+            icon: mdi:glass-wine
+            color: purple
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 12
+              rows: 1
+            entity: sensor.homecave_estimated_value
+            name: Cellar Valuation
+            icon: mdi:cash-multiple
+            color: teal
+            vertical: false
+            features_position: bottom
+          - type: custom:homecave-summary-card
+            title: HomeCave Highlights & Recent Stock
+            show_recent: true
+            show_style_bar: true
+            dashboard_path: /homecave-cellar/overview
+            grid_options:
+              columns: full
+              rows: auto
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Drinking Windows & Status
+            heading_style: title
+            icon: mdi:clock-outline
+          - type: tile
+            grid_options:
+              columns: 6
+              rows: 1
+            entity: sensor.homecave_ready_to_drink
+            name: Ready to Drink
+            icon: mdi:check-decagram
+            color: green
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 6
+              rows: 1
+            entity: sensor.homecave_drink_soon
+            name: Drink Soon
+            icon: mdi:clock-alert-outline
+            color: amber
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 6
+              rows: 1
+            entity: sensor.homecave_keep_bottles
+            name: Keep / Aging
+            icon: mdi:archive-clock-outline
+            color: blue
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 6
+              rows: 1
+            entity: sensor.homecave_past_peak_bottles
+            name: Past Peak
+            icon: mdi:alert-outline
+            color: red
+            vertical: false
+            features_position: bottom
+          - type: heading
+            heading: Wine Style Breakdown
+            heading_style: subtitle
+            icon: mdi:chart-pie
+          - type: distribution
+            title: Stock by Wine Style
+            entities:
+              - entity: sensor.homecave_red_wine_bottles
+                name: Red
+                color: '#b71c1c'
+              - entity: sensor.homecave_white_wine_bottles
+                name: White
+                color: '#f57f17'
+              - entity: sensor.homecave_rose_wine_bottles
+                color: '#ec407a'
+                name: Rosé
+              - entity: sensor.homecave_sparkling_wine_bottles
+                name: Sparkling
+                color: '#0288d1'
+              - entity: sensor.homecave_dessert_fortified_bottles
+                name: Dessert / Fortified
+                color: '#6a1b9a'
+            grid_options:
+              columns: full
+              rows: auto

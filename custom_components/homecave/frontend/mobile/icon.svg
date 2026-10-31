@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="HomeCave Icon">
+  <defs>
+    <clipPath id="hc-circle-clip">
+      <circle cx="128" cy="128" r="95" />
+    </clipPath>
+  </defs>
+  <!-- Rounded White Badge -->
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="#ffffff" stroke="#e0dbdd" stroke-width="4" />
+  <!-- Interior Diagonal Wine Stripes (clipped to emblem circle) -->
+  <g clip-path="url(#hc-circle-clip)">
+    <circle cx="128" cy="128" r="95" fill="#ffffff" />
+    <line x1="36" y1="184" x2="188" y2="32" stroke="#d5192a" stroke-width="11" stroke-linecap="butt" />
+    <line x1="50" y1="198" x2="202" y2="46" stroke="#ef6a73" stroke-width="10" stroke-linecap="butt" />
+    <line x1="64" y1="212" x2="216" y2="60" stroke="#f6c0c4" stroke-width="10" stroke-linecap="butt" />
+    <!-- House Silhouette Outline (transparent fill so stripes pass behind bottle) -->
+    <path d="M 62 124 L 128 64 L 160 93 L 160 75 L 176 75 L 176 108 L 194 124 L 180 124 L 180 176 L 76 176 L 76 124 Z"
+          fill="none" stroke="#621322" stroke-width="9" stroke-linejoin="round" stroke-linecap="round" />
+    <!-- House Window (2x2 Grid) -->
+    <rect x="150" y="136" width="9" height="9" rx="1.5" fill="#621322" />
+    <rect x="162" y="136" width="9" height="9" rx="1.5" fill="#621322" />
+    <rect x="150" y="148" width="9" height="9" rx="1.5" fill="#621322" />
+    <rect x="162" y="148" width="9" height="9" rx="1.5" fill="#621322" />
+    <!-- Wine Bottle Centered in Foreground -->
+    <path d="M 118 76 L 138 76 C 140 76 141 78 141 81 L 141 86 C 141 88 139 89 139 92 L 140 112 C 141 124 152 132 152 150 L 152 214 C 152 219 148 222 142 222 L 114 222 C 108 222 104 219 104 214 L 104 150 C 104 132 115 124 116 112 L 117 92 C 117 89 115 88 115 86 L 115 81 C 115 78 116 76 118 76 Z"
+          fill="#c11227" stroke="#621322" stroke-width="8.5" stroke-linejoin="round" />
+    <!-- Bottle Specular Highlight -->
+    <path d="M 115 137 C 112 143 112 150 112 160 L 112 184"
+          fill="none" stroke="#ffffff" stroke-width="5.5" stroke-linecap="round" />
+  </g>
+  <!-- Outer Circular Emblem Ring -->
+  <circle cx="128" cy="128" r="95" fill="none" stroke="#621322" stroke-width="10" />
+</svg>

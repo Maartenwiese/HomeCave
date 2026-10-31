@@ -1,0 +1,76 @@
+blueprint:
+  name: HomeCave — Drinking Window, Low Stock & Temperature Alerts
+  description: >
+    Notifies you when a wine enters its "Drink Soon" window, when a favorite wine drops to low stock,
+    or when your wine fridge/cellar temperature drifts above a safe threshold.
+    Built following homeassistant-ai/skills best practices (uses event.received on the integration's
+    event.* entity and guarded numeric_state triggers rather than Jinja templates).
+  domain: automation
+  source_url: https://github.com/Maartenwiese/HomeCave/blob/main/blueprints/automation/homecave/cellar_alerts.yaml
+  input:
+    activity_event_entity:
+      name: HomeCave Activity Event Entity
+      description: The event.* entity exposed by the HomeCave integration.
+      selector:
+        entity:
+          domain: event
+          integration: homecave
+    cellar_temperature_sensor:
+      name: Cellar / Wine Fridge Temperature Sensor
+      description: Temperature sensor inside your wine fridge or cellar.
+      selector:
+        entity:
+          domain: sensor
+          device_class: temperature
+    max_safe_temperature:
+      name: Maximum Safe Cellar Temperature (°C)
+      description: Alert when cellar temperature stays above this value for 15 minutes.
+      default: 18
+      selector:
+        number:
+          min: 8
+          max: 30
+          step: 0.5
+          unit_of_measurement: "°C"
+    notify_action:
+      name: Notification Action
+      description: Action to run when an alert triggers (e.g., notify.mobile_app_*).
+      default: []
+      selector:
+        action:
+
+mode: parallel
+max: 5
+
+triggers:
+  - trigger: state
+    entity_id: !input activity_event_entity
+    id: cellar_event
+  - trigger: numeric_state
+    entity_id: !input cellar_temperature_sensor
+    above: !input max_safe_temperature
+    for:
+      minutes: 15
+    id: high_temperature
+
+conditions:
+  - condition: template
+    value_template: >
+      {{ trigger.from_state is not none and trigger.from_state.state not in ['unavailable', 'unknown'] }}
+
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: cellar_event
+          - condition: state
+            entity_id: !input activity_event_entity
+            attribute: event_type
+            state:
+              - stock_low
+              - drink_window_alert
+        sequence: !input notify_action
+      - conditions:
+          - condition: trigger
+            id: high_temperature
+        sequence: !input notify_action

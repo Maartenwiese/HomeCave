@@ -1,0 +1,108 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up HomeCave",
+        "description": "Configure HomeCave - your local Wine Cellar, AI vision bottle label scanner, and cellar options.",
+        "data": {
+          "cellar_name": "Cellar Name",
+          "llm_provider": "AI / LLM Provider",
+          "gemini_api_key": "Google Gemini API Key",
+          "gemini_model": "Google Gemini Model ID (e.g., gemini-3.5-flash-lite)",
+          "claude_api_key": "Anthropic Claude API Key",
+          "claude_model": "Anthropic Claude Model ID (e.g., claude-haiku-5-5)",
+          "currency": "Currency Code (e.g., EUR, USD)",
+          "vivino_country_code": "Vivino Country Code (e.g., NL, US, FR)",
+          "low_stock_threshold": "Low Stock Alert Threshold (bottles)",
+          "temperature_entity": "Optional HomeCave / Fridge Temperature Sensor (sensor.*)",
+          "humidity_entity": "Optional HomeCave / Fridge Humidity Sensor (sensor.*)"
+        }
+      }
+    },
+    "error": {
+      "missing_gemini_api_key": "A Google Gemini API Key is required when Google Gemini is selected.",
+      "missing_claude_api_key": "An Anthropic Claude API Key is required when Anthropic Claude is selected."
+    },
+    "abort": {
+      "already_configured": "This HomeCave cellar is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "HomeCave Options",
+        "menu_options": {
+          "settings": "Configure HomeCave Settings",
+          "backup": "Create Full Database Backup (.zip)",
+          "download_backup": "Download Created Backup (.zip)",
+          "restore": "Restore Database from Backup (.zip)",
+          "import_wines": "Import Wines (JSON / CSV / ZIP)",
+          "upload_vivino": "Upload Vivino Export (ZIP / CSV)"
+        }
+      },
+      "settings": {
+        "title": "HomeCave Settings",
+        "description": "Update your AI / LLM provider and credentials, currency settings, or linked Home Assistant cellar sensors.",
+        "data": {
+          "llm_provider": "AI / LLM Provider",
+          "gemini_api_key": "Google Gemini API Key",
+          "gemini_model": "Google Gemini Model ID (e.g., gemini-3.5-flash-lite)",
+          "claude_api_key": "Anthropic Claude API Key",
+          "claude_model": "Anthropic Claude Model ID (e.g., claude-haiku-5-5)",
+          "currency": "Currency Code (e.g., EUR, USD)",
+          "vivino_country_code": "Vivino Country Code (e.g., NL, US, FR)",
+          "low_stock_threshold": "Low Stock Alert Threshold (bottles)",
+          "temperature_entity": "Optional HomeCave / Fridge Temperature Sensor (sensor.*)",
+          "humidity_entity": "Optional HomeCave / Fridge Humidity Sensor (sensor.*)"
+        }
+      },
+      "backup": {
+        "title": "Create Database Backup (.zip)",
+        "description": "Create a complete .zip archive containing your SQLite database, metadata.json, and all bottle label images."
+      },
+      "download_backup": {
+        "title": "Download Created Backup (.zip)",
+        "description": "Select an existing backup archive to download. When ready, click the direct download link below:\n\n[📥 Download {filename}]({download_url})",
+        "data": {
+          "backup_file": "Select Backup Archive"
+        }
+      },
+      "upload_vivino": {
+        "title": "Upload Vivino Export (ZIP / CSV)",
+        "description": "Import wines, ratings, and cellar inventory from an official Vivino ZIP archive (contains full_wine_list.csv and cellar.csv with cover images) or a Vivino CSV file.",
+        "data": {
+          "file_path": "File path in config directory (e.g., vivino_data.zip or vivino.csv)",
+          "csv_content": "Or paste CSV text directly"
+        }
+      },
+      "restore": {
+        "title": "Restore Database from Backup (.zip)",
+        "description": "Select an existing backup archive from your backups directory or specify a custom path.",
+        "data": {
+          "backup_file": "Select Backup Archive",
+          "custom_path": "Or specify custom path / filename"
+        }
+      },
+      "import_wines": {
+        "title": "Import Wines",
+        "description": "Import wines and addition batches from a file path (.json, .csv, .zip) or JSON text.",
+        "data": {
+          "import_source": "File path (.json, .csv, .zip) or JSON text"
+        }
+      }
+    },
+    "error": {
+      "missing_gemini_api_key": "A Google Gemini API Key is required when Google Gemini is selected.",
+      "missing_claude_api_key": "An Anthropic Claude API Key is required when Anthropic Claude is selected.",
+      "backup_failed": "Failed to create database backup archive.",
+      "restore_failed": "Failed to restore database from backup archive.",
+      "import_failed": "Failed to import wines from the provided source.",
+      "no_backup_selected": "Please select a backup file or provide a valid path.",
+      "no_import_source": "Please provide a file path or JSON data to import.",
+      "no_backups_available": "No backup archives found. Create a backup first.",
+      "download_staging_failed": "Could not prepare backup archive for download.",
+      "vivino_import_failed": "Failed to import wines from Vivino CSV.",
+      "no_csv_provided": "Please paste Vivino CSV content or provide a file path."
+    }
+  }
+}

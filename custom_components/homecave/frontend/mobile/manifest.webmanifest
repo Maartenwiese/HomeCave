@@ -1,0 +1,56 @@
+{
+  "id": "/homecave/",
+  "name": "HomeCave - your local Wine Cellar",
+  "short_name": "HomeCave",
+  "description": "HomeCave - your local Wine Cellar: AI Bottle Label Scanner, SommAI Pairing & Inventory App for Home Assistant",
+  "start_url": "/homecave/index.html",
+  "scope": "/homecave/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#621322",
+  "categories": ["food", "lifestyle", "utilities"],
+  "icons": [
+    {
+      "src": "/homecave/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/homecave/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/homecave/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/homecave/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Scan Bottle Label",
+      "short_name": "Scan Bottle",
+      "description": "Snap a wine label photo and recognize with AI",
+      "url": "/homecave/index.html?action=scan",
+      "icons": [{ "src": "/homecave/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Ready to Drink",
+      "short_name": "Ready Now",
+      "description": "View bottles ready to open right now",
+      "url": "/homecave/index.html?filter=ready",
+      "icons": [{ "src": "/homecave/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}

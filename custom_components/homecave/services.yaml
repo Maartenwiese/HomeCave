@@ -1,0 +1,311 @@
+scan_bottle:
+  name: Scan wine bottle label
+  description: >
+    Scan a wine bottle photo using the configured AI vision model (Gemini or Claude),
+    look up its Vivino community rating, and check if it is already in the local SQLite database.
+  fields:
+    camera_entity_id:
+      name: Camera or Image Entity
+      description: Optional Home Assistant camera.* or image.* entity to capture a bottle frame from.
+      selector:
+        entity:
+          domain:
+            - camera
+            - image
+    image_data:
+      name: Base64 Image Data URI
+      description: Optional base64-encoded image data URI (uploaded from phone/browser).
+      selector:
+        text:
+
+add_wine:
+  name: Add wine or purchase batch
+  description: >
+    Add a new wine or add bottles to an existing wine in the local SQLite database,
+    recording date/time added, where it was bought, when to drink, storage location, and notes.
+  fields:
+    winery:
+      name: Winery / Producer
+      required: true
+      example: "Château Margaux"
+      selector:
+        text:
+    name:
+      name: Wine Name / Cuvée
+      required: true
+      example: "Pavillon Rouge"
+      selector:
+        text:
+    vintage:
+      name: Vintage Year
+      description: 4-digit harvest year (leave empty for Non-Vintage).
+      example: 2018
+      selector:
+        number:
+          min: 1900
+          max: 2100
+          mode: box
+    wine_type:
+      name: Wine Type
+      default: "red"
+      selector:
+        select:
+          options:
+            - "red"
+            - "white"
+            - "rose"
+            - "sparkling"
+            - "dessert"
+            - "fortified"
+    varietal:
+      name: Varietal / Grapes
+      example: "Cabernet Sauvignon, Merlot"
+      selector:
+        text:
+    region:
+      name: Region / Appellation
+      example: "Margaux, Bordeaux"
+      selector:
+        text:
+    country:
+      name: Country
+      example: "France"
+      selector:
+        text:
+    quantity:
+      name: Quantity of Bottles Added
+      default: 1
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 120
+          mode: box
+    added_at:
+      name: Date/Time Added (ISO-8601)
+      description: Automatically defaults to the current date/time if omitted.
+      selector:
+        text:
+    purchase_location:
+      name: Where Bought
+      description: Store, winery, website, or gift source.
+      example: "Gall & Gall Amsterdam"
+      selector:
+        text:
+    purchase_price:
+      name: Purchase Price (per bottle)
+      example: 24.50
+      selector:
+        number:
+          min: 0
+          max: 10000
+          step: 0.01
+          mode: box
+    storage_location:
+      name: Storage Location
+      description: Wine fridge zone, cellar rack, shelf, and slot.
+      example: "HomeCave - Rack A3"
+      selector:
+        text:
+    drink_from_year:
+      name: Drink From (Year)
+      example: 2025
+      selector:
+        number:
+          min: 1950
+          max: 2100
+          mode: box
+    drink_until_year:
+      name: Drink Until (Year)
+      example: 2035
+      selector:
+        number:
+          min: 1950
+          max: 2100
+          mode: box
+    drink_window_note:
+      name: When to Drink Guidance
+      example: "Decant 2 hours; save for special dinner"
+      selector:
+        text:
+    general_notes:
+      name: Free-Form Overview Notes
+      description: Master overview notes for this wine.
+      selector:
+        text:
+          multiline: true
+    batch_notes:
+      name: Addition / Batch Notes
+      description: Notes specific to this purchase or addition.
+      selector:
+        text:
+          multiline: true
+    vivino_rating:
+      name: Vivino Rating (1.0 - 5.0)
+      example: 4.3
+      selector:
+        number:
+          min: 1.0
+          max: 5.0
+          step: 0.1
+          mode: box
+    as_tasted:
+      name: Add directly to Tasted (do not add to cellar stock)
+      description: When true, records the wine as tasted (quantity 0 for new wines) without adding bottles to cellar inventory.
+      default: false
+      selector:
+        boolean:
+    personal_rating:
+      name: Personal Rating (1.0 - 5.0)
+      selector:
+        number:
+          min: 1.0
+          max: 5.0
+          step: 0.5
+          mode: slider
+
+adjust_quantity:
+  name: Adjust bottle quantity (+ / -)
+  description: >
+    Increase (+N) or decrease/consume (-N) bottles for an existing wine.
+    Records addition details on +N or tasting notes & personal rating on -N.
+  fields:
+    wine_id:
+      name: Wine ID
+      required: true
+      selector:
+        number:
+          min: 1
+          mode: box
+    delta:
+      name: Bottle Delta (+N or -N)
+      required: true
+      example: 1
+      selector:
+        number:
+          min: -100
+          max: 100
+          mode: box
+    batch_id:
+      name: Specific Batch ID (Optional)
+      description: When consuming (-1), optionally specify which storage batch to pull from.
+      selector:
+        number:
+          min: 1
+          mode: box
+    purchase_location:
+      name: Where Bought (for + additions)
+      selector:
+        text:
+    storage_location:
+      name: Storage Location
+      selector:
+        text:
+    notes:
+      name: Batch Note (on +) or Tasting Note (on -)
+      selector:
+        text:
+          multiline: true
+    personal_rating:
+      name: Personal Rating (1.0 - 5.0)
+      selector:
+        number:
+          min: 1.0
+          max: 5.0
+          step: 0.5
+          mode: slider
+
+update_wine:
+  name: Update wine metadata & notes overview
+  description: Update free-form notes overview, drinking window, Vivino rating, or wine classification.
+  fields:
+    wine_id:
+      name: Wine ID
+      required: true
+      selector:
+        number:
+          min: 1
+          mode: box
+    general_notes:
+      name: Free-Form Notes Overview
+      selector:
+        text:
+          multiline: true
+    drink_from_year:
+      name: Drink From (Year)
+      selector:
+        number:
+          min: 1950
+          max: 2100
+          mode: box
+    drink_until_year:
+      name: Drink Until (Year)
+      selector:
+        number:
+          min: 1950
+          max: 2100
+          mode: box
+    drink_window_note:
+      name: When to Drink Guidance
+      selector:
+        text:
+
+refresh_vivino:
+  name: Refresh Vivino ratings
+  description: Re-query Vivino for one wine (or all in-stock wines if wine_id is omitted).
+  fields:
+    wine_id:
+      name: Wine ID (Optional)
+      selector:
+        number:
+          min: 1
+          mode: box
+
+export_inventory:
+  name: Export wine inventory to CSV or JSON
+  description: Write a downloadable CSV or JSON snapshot to /local/homecave/exports/.
+  fields:
+    format:
+      name: Format
+      default: "csv"
+      selector:
+        select:
+          options:
+            - "csv"
+            - "json"
+
+create_backup:
+  name: Create Full Database Backup (.zip)
+  description: Create a complete .zip archive containing SQLite database, metadata.json, and all bottle cover images saved to /local/homecave/backups/.
+
+restore_backup:
+  name: Restore Database from Backup (.zip)
+  description: Restore the SQLite database and all bottle cover images from a .zip backup archive.
+  fields:
+    file_path:
+      name: Backup File Path
+      description: Absolute path or filename in /local/homecave/backups/ to restore from.
+      selector:
+        text:
+
+import_wines:
+  name: Import Wines (CSV, JSON, or ZIP)
+  description: Import wines and batches into the cellar from a file path or JSON text.
+  fields:
+    source:
+      name: Import Source
+      description: File path (.json, .csv, .zip) or JSON text.
+      required: true
+      selector:
+        text:
+          multiline: true
+    format:
+      name: Format
+      default: "auto"
+      selector:
+        select:
+          options:
+            - "auto"
+            - "json"
+            - "csv"
+            - "zip"

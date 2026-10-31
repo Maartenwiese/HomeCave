@@ -1,0 +1,29 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release for HACS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create ZIP archive for HACS release
+        run: |
+          cd "${{ github.workspace }}/custom_components/homecave"
+          zip -r "${{ github.workspace }}/homecave.zip" . -x "*.pyc" "__pycache__/*"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: homecave.zip
+          generate_release_notes: true

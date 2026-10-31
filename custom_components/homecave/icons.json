@@ -1,0 +1,58 @@
+{
+  "entity": {
+    "sensor": {
+      "total_bottles": {
+        "default": "mdi:glass-wine"
+      },
+      "unique_wines": {
+        "default": "mdi:glass-wine"
+      },
+      "ready_to_drink": {
+        "default": "mdi:check-decagram"
+      },
+      "drink_soon": {
+        "default": "mdi:clock-alert-outline"
+      },
+      "keep_bottles": {
+        "default": "mdi:archive-clock-outline"
+      },
+      "past_peak_bottles": {
+        "default": "mdi:alert-outline"
+      },
+      "estimated_value": {
+        "default": "mdi:cash-multiple"
+      },
+      "red_bottles": {
+        "default": "mdi:glass-wine"
+      },
+      "white_bottles": {
+        "default": "mdi:bottle-wine-outline"
+      },
+      "rose_bottles": {
+        "default": "mdi:glass-wine"
+      },
+      "sparkling_bottles": {
+        "default": "mdi:glass-flute"
+      },
+      "dessert_fortified_bottles": {
+        "default": "mdi:glass-cocktail"
+      }
+    },
+    "event": {
+      "activity": {
+        "default": "mdi:glass-wine"
+      }
+    }
+  },
+  "services": {
+    "scan_bottle": "mdi:camera-iris",
+    "add_wine": "mdi:glass-wine",
+    "adjust_quantity": "mdi:plus-minus-variant",
+    "update_wine": "mdi:notebook-edit-outline",
+    "refresh_vivino": "mdi:refresh",
+    "export_inventory": "mdi:file-export-outline",
+    "create_backup": "mdi:cloud-upload-outline",
+    "restore_backup": "mdi:cloud-download-outline",
+    "import_wines": "mdi:file-import-outline"
+  }
+}
