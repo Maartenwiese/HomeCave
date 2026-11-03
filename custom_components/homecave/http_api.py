@@ -123,6 +123,33 @@ async def _async_run_blocking(hass: Any, func: Any, *args: Any) -> Any:
     return func(*args)
 
 
+def _prepare_import_payload(content: Any, fmt: str, config_dir: Path) -> tuple[Any, bool]:
+    """Executor helper for the PWA import action.
+
+    Decodes base64 / data-URI uploads and detects Vivino export ZIPs (which resolves, opens and
+    reads the archive for path inputs). Returns ``(content, is_vivino_export_zip)``.
+    """
+    import base64
+
+    from .backup import is_vivino_export_zip
+
+    if isinstance(content, str):
+        if content.startswith("data:") and ";base64," in content:
+            content = base64.b64decode(content.split(";base64,", 1)[1])
+        elif fmt == "zip" and not content.endswith(".zip") and len(content) > 100:
+            try:
+                content = base64.b64decode(content)
+            except Exception:  # noqa: BLE001 - not base64: leave as-is (path or text)
+                pass
+
+    is_vivino = False
+    if (isinstance(content, bytes) and content.startswith(b"PK")) or (
+        isinstance(content, str) and content.endswith(".zip")
+    ):
+        is_vivino = is_vivino_export_zip(content, config_dir=config_dir)
+    return content, is_vivino
+
+
 def _sign_for_request(hass: Any, request: web.Request, data: Any) -> Any:
     """Sign private cover ``image_url`` values with the requesting session's refresh token."""
     try:
@@ -416,30 +443,17 @@ async def async_handle_pwa_post(
         fmt = str(payload.get("format") or payload.get("format_type") or "auto").lower()
         content = payload.get("content") or payload.get("payload") or payload.get("source") or ""
         enrich_ai = bool(payload.get("enrich_ai", True))
-        if isinstance(content, str):
-            if content.startswith("data:") and ";base64," in content:
-                import base64
-
-                content = base64.b64decode(content.split(";base64,", 1)[1])
-            elif fmt == "zip" and not content.endswith(".zip") and len(content) > 100:
-                import base64
-
-                try:
-                    content = base64.b64decode(content)
-                except Exception:
-                    pass
-
-        if (isinstance(content, bytes) and content.startswith(b"PK")) or (
-            isinstance(content, str) and content.endswith(".zip")
-        ):
-            from .backup import is_vivino_export_zip
-
-            config_dir = Path(getattr(hass.config, "config_dir", "."))
-            if is_vivino_export_zip(content, config_dir=config_dir):
-                res = await coordinator.async_import_vivino_zip(
-                    content, download_images=True, enrich_ai=enrich_ai
-                )
-                return 200, {**res, "statistics": coordinator.statistics}
+        config_dir = Path(getattr(hass.config, "config_dir", "."))
+        # base64 decoding (up to ~50 MB) and Vivino ZIP detection (resolve/open/read the ZIP)
+        # are blocking work: run them together in one executor job, never on the event loop.
+        content, is_vivino_zip = await _async_run_blocking(
+            hass, _prepare_import_payload, content, fmt, config_dir
+        )
+        if is_vivino_zip:
+            res = await coordinator.async_import_vivino_zip(
+                content, download_images=True, enrich_ai=enrich_ai
+            )
+            return 200, {**res, "statistics": coordinator.statistics}
 
         if fmt == "csv" and isinstance(content, str):
             res = await coordinator.async_import_vivino_csv(content, enrich_ai=enrich_ai)

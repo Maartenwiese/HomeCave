@@ -41,7 +41,7 @@ A great wine collection shouldn't live in a forgotten spreadsheet or remain lock
 
 ---
 
-**HomeCave** (`homecave`, version `0.9.5`) is a native Home Assistant custom integration, bundled Lovelace frontend card suite (`custom:homecave-card`, `custom:homecave-summary-card`, `custom:homecave-sommai-card`), and standalone Mobile Progressive Web App (`/homecave`) that keeps track of your local wine cellar. It stores your inventory in a local SQLite database (`<config>/homecave/homecave.db`), scans wine bottle photos using **AI vision models** (supporting both **Google Gemini** and **Anthropic Claude**), pairs dishes with your active cellar via **SommAI**, enriches bottles with **Vivino community ratings** and **AI sommelier research**, and tracks every addition with date/time added, where it was bought, physical storage location, drinking window (*Ready*, *Soon*, *Keep*, *Past Peak*), and tasting notes.
+**HomeCave** (`homecave`, version `0.9.6`) is a native Home Assistant custom integration, bundled Lovelace frontend card suite (`custom:homecave-card`, `custom:homecave-summary-card`, `custom:homecave-sommai-card`), and standalone Mobile Progressive Web App (`/homecave`) that keeps track of your local wine cellar. It stores your inventory in a local SQLite database (`<config>/homecave/homecave.db`), scans wine bottle photos using **AI vision models** (supporting both **Google Gemini** and **Anthropic Claude**), pairs dishes with your active cellar via **SommAI**, enriches bottles with **Vivino community ratings** and **AI sommelier research**, and tracks every addition with date/time added, where it was bought, physical storage location, drinking window (*Ready*, *Soon*, *Keep*, *Past Peak*), and tasting notes.
 
 Built following the [**`homeassistant-ai/skills`**](https://github.com/homeassistant-ai/skills) (`home-assistant-best-practices`) standards and 100% HACS &amp; Hassfest compliant.
 
@@ -87,7 +87,7 @@ Built following the [**`homeassistant-ai/skills`**](https://github.com/homeassis
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Maartenwiese&repository=HomeCave&category=integration)
 
 1. Click the **Open HACS Repository** button above (or open **HACS** in your Home Assistant sidebar and search for **HomeCave**).
-2. Open **HomeCave** and click **Download** in the bottom-right corner (`v0.9.5` or newer).
+2. Open **HomeCave** and click **Download** in the bottom-right corner (`v0.9.6` or newer).
 3. **Restart Home Assistant** (**Settings → System → Restart**) so Home Assistant loads the `homecave` integration.
 
 #### Method B: Custom Repository (Before HACS Default Store Inclusion)
@@ -98,7 +98,7 @@ Built following the [**`homeassistant-ai/skills`**](https://github.com/homeassis
    - **Repository**: `https://github.com/Maartenwiese/HomeCave`
    - **Type / Category**: Select **Integration**
 4. Click **Add**, then close the dialog.
-5. Search for **HomeCave** in HACS, open it, and click **Download** in the bottom-right corner. Confirm the download (`v0.9.5` or newer).
+5. Search for **HomeCave** in HACS, open it, and click **Download** in the bottom-right corner. Confirm the download (`v0.9.6` or newer).
 6. **Restart Home Assistant** (**Settings → System → Restart**) so Home Assistant loads the `homecave` integration.
 
 ---

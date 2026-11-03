@@ -181,7 +181,8 @@ class WineInventoryCoordinator:
 
         config_dir = Path(getattr(hass.config, "config_dir", "."))
         self.db_path = config_dir / STORAGE_DIR_NAME / DB_FILENAME
-        self._migrate_legacy_storage_if_needed(config_dir)
+        # Pure path bookkeeping only: all filesystem work (legacy migration, cover migration,
+        # schema setup) happens in async_initialize() via executor jobs.
         self.db = WineDatabase(self.db_path)
 
         self.statistics: dict[str, Any] = {}
@@ -199,7 +200,10 @@ class WineInventoryCoordinator:
         }
 
     def _migrate_legacy_storage_if_needed(self, config_dir: Path) -> None:
-        """One-time seamless migration from legacy wine_inventory storage if homecave.db is absent."""
+        """One-time seamless migration from legacy wine_inventory storage if homecave.db is absent.
+
+        Blocking filesystem I/O: run only in the executor (called from async_initialize).
+        """
         import shutil
 
         try:
@@ -353,8 +357,12 @@ class WineInventoryCoordinator:
 
     async def async_initialize(self) -> None:
         """Initialize the SQLite schema and load initial statistics."""
-        # Security (v0.9.5): move any cover photos out of the public <config>/www/ folder
         config_dir = Path(getattr(self.hass.config, "config_dir", "."))
+        # One-time legacy wine_inventory -> homecave migration (blocking I/O, so executor)
+        await self.hass.async_add_executor_job(
+            self._migrate_legacy_storage_if_needed, config_dir
+        )
+        # Security (v0.9.5): move any cover photos out of the public <config>/www/ folder
         moved = await self.hass.async_add_executor_job(migrate_public_covers, config_dir)
         if moved:
             _LOGGER.warning(

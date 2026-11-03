@@ -62,25 +62,38 @@ class _ThreadedHass:
 
 
 class _LoopGuard:
-    """Patch blocking Path methods so they raise when called on the event-loop thread."""
+    """Patch blocking filesystem/ZIP calls so they raise when called on the event-loop thread."""
 
-    METHODS = ("is_file", "exists", "stat", "read_bytes", "read_text", "unlink", "resolve")
+    METHODS = (
+        "is_file", "exists", "stat", "read_bytes", "read_text", "unlink", "resolve",
+        "is_dir", "is_symlink", "mkdir", "iterdir", "open",
+    )
 
     def __init__(self) -> None:
         self.loop_thread: threading.Thread | None = None
         self._patches = []
 
+    def _guard(self, label: str, real):
+        def _guarded(*args, **kwargs):
+            if threading.current_thread() is self.loop_thread:
+                raise AssertionError(f"blocking {label}() on the event loop: {args[:1]}")
+            return real(*args, **kwargs)
+
+        return _guarded
+
     def __enter__(self) -> "_LoopGuard":
+        import shutil
+        import zipfile
+
         self.loop_thread = threading.current_thread()
-        for name in self.METHODS:
-            real = getattr(Path, name)
-
-            def _guarded(path_self, *args, __real=real, __name=name, **kwargs):
-                if threading.current_thread() is self.loop_thread:
-                    raise AssertionError(f"blocking Path.{__name}() on the event loop: {path_self}")
-                return __real(path_self, *args, **kwargs)
-
-            p = patch.object(Path, name, _guarded)
+        targets = [(Path, name, f"Path.{name}") for name in self.METHODS]
+        targets += [
+            (shutil, "copy2", "shutil.copy2"),
+            (shutil, "move", "shutil.move"),
+            (zipfile, "ZipFile", "zipfile.ZipFile"),
+        ]
+        for owner, name, label in targets:
+            p = patch.object(owner, name, self._guard(label, getattr(owner, name)))
             p.start()
             self._patches.append(p)
         return self
@@ -305,6 +318,24 @@ class TestNoBlockingFilesystemCalls(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertEqual(self._direct_calls(func), [], func.__qualname__)
 
+    def test_static_guard_init_and_import_helpers(self) -> None:
+        """v0.9.6: no migration in __init__; no direct ZIP detection in the PWA import handler."""
+        init_calls = self._helper_calls(WineInventoryCoordinator.__init__)
+        self.assertNotIn("_migrate_legacy_storage_if_needed", init_calls)
+        post_calls = self._helper_calls(http_api_module.async_handle_pwa_post)
+        self.assertNotIn("is_vivino_export_zip", post_calls)
+        self.assertNotIn("b64decode", post_calls)
+
+    def _helper_calls(self, func) -> list[str]:
+        """Names called directly (not passed as executor arguments) in a function body."""
+        tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
+        names = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                f = node.func
+                names.append(f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", ""))
+        return names
+
     async def test_runtime_loop_thread_guard(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             hass = _ThreadedHass(tmp)
@@ -348,6 +379,79 @@ class TestNoBlockingFilesystemCalls(unittest.IsolatedAsyncioTestCase):
                         await coord.async_scan_bottle(image_data=JPEG_DATA_URI)
             covers = Path(tmp) / "homecave" / "covers"
             self.assertEqual(list(covers.glob("bottle_*")) if covers.exists() else [], [])
+
+    async def test_coordinator_setup_and_legacy_migration_off_loop(self) -> None:
+        """v0.9.6: constructing the coordinator and async_initialize() do no file I/O on the loop."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy_db_path = root / "wine_inventory" / "wine_inventory.db"
+            legacy_db = WineDatabase(legacy_db_path)
+            legacy_db.initialize()
+            legacy_db.add_or_increment_wine(winery="Legacy", name="Wine", quantity=1)
+            legacy_db.checkpoint_wal()
+            legacy_covers = root / "www" / "wine_inventory" / "covers"
+            legacy_covers.mkdir(parents=True)
+            (legacy_covers / "bottle_legacy01.jpg").write_bytes(JPEG)
+
+            hass = _ThreadedHass(tmp)
+            with _LoopGuard():
+                coord = WineInventoryCoordinator(hass=hass, entry_id="legacy", config={})
+                await coord.async_initialize()
+
+            self.assertTrue((root / "homecave" / "homecave.db").exists())
+            self.assertEqual(len(coord.wines), 1)
+            self.assertTrue((root / "homecave" / "covers" / "bottle_legacy01.jpg").exists())
+            self.assertFalse(legacy_covers.exists())
+
+    async def test_pwa_import_vivino_detection_off_loop(self) -> None:
+        """v0.9.6: base64 decoding + Vivino ZIP detection in the PWA import run in the executor."""
+        import io
+        import zipfile as zipfile_module
+
+        csv_text = "Winery,Wine name,Vintage,Region,Country,User cellar count\nW,Cellar Red,2019,R,FR,2\n"
+        buf = io.BytesIO()
+        with zipfile_module.ZipFile(buf, "w") as zf:
+            zf.writestr("vivino_data/cellar.csv", csv_text)
+        zip_bytes = buf.getvalue()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            hass = _ThreadedHass(tmp)
+            coord = WineInventoryCoordinator(hass=hass, entry_id="imp", config={})
+            await coord.async_initialize()
+            hass.data.setdefault(DOMAIN, {})["imp"] = {"coordinator": coord}
+            exports = Path(tmp) / "homecave" / "exports"
+            exports.mkdir(parents=True)
+            (exports / "vivino_export.zip").write_bytes(zip_bytes)
+
+            calls: list = []
+            real_import = coord.async_import_vivino_zip
+
+            async def _record_import(content, **kwargs):
+                calls.append(type(content).__name__)
+                return await real_import(content, **{**kwargs, "enrich_ai": False})
+
+            coord.async_import_vivino_zip = _record_import
+            with _LoopGuard():
+                # (a) base64 data URI upload (bytes after decoding)
+                status_a, _ = await http_api_module.async_handle_pwa_post(
+                    hass,
+                    "import",
+                    {
+                        "format": "zip",
+                        "content": "data:application/zip;base64," + base64.b64encode(zip_bytes).decode(),
+                        "enrich_ai": False,
+                    },
+                    user=ADMIN,
+                )
+                # (b) .zip path inside HomeCave storage
+                status_b, _ = await http_api_module.async_handle_pwa_post(
+                    hass,
+                    "import",
+                    {"format": "zip", "content": "homecave/exports/vivino_export.zip", "enrich_ai": False},
+                    user=ADMIN,
+                )
+            self.assertEqual((status_a, status_b), (200, 200))
+            self.assertEqual(calls, ["bytes", "str"])  # both detected as Vivino exports
 
 
 class TestFrontendCoverAllowlist(unittest.TestCase):

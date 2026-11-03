@@ -1,5 +1,5 @@
 /**
- * HomeCave — Local Wine Cellar, AI Label Scanner & SommAI Lovelace Cards (`custom:homecave-card`, v0.9.5)
+ * HomeCave — Local Wine Cellar, AI Label Scanner & SommAI Lovelace Cards (`custom:homecave-card`, v0.9.6)
  * Built using native Home Assistant Web Components (<ha-card>, <ha-icon>) and HA CSS variables.
  */
 
