@@ -337,7 +337,11 @@ def save_bottle_cover_image(
     image_bytes: bytes,
     mime_type: str = "image/jpeg",
 ) -> str:
-    """Save scanned bottle image under <config>/www/homecave/covers/ and return /local/ URL."""
+    """Save a scanned/uploaded bottle photo in private <config>/homecave/covers/.
+
+    Returns the canonical, authenticated cover path ``/api/homecave/cover/<file>`` (never a
+    public ``/local/`` URL).
+    """
     if not image_bytes or len(image_bytes) > MAX_IMAGE_UPLOAD_BYTES:
         raise GeminiScannerError(
             "Image payload is empty or exceeds the 10 MB size limit."
@@ -359,7 +363,7 @@ def save_bottle_cover_image(
     covers_dir.mkdir(parents=True, exist_ok=True)
     target_path = covers_dir / filename
     target_path.write_bytes(image_bytes)
-    return f"/local/homecave/covers/{filename}"
+    return f"/api/homecave/cover/{filename}"
 
 
 def _normalize_extracted_payload(raw: dict[str, Any]) -> dict[str, Any]:

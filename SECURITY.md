@@ -36,5 +36,8 @@ release and credited in the release notes unless you prefer to stay anonymous.
   authenticated, admin-only `/api/homecave/download/backup/` view (short-lived signed links).
 - Cover images are only downloaded from `https://images.vivino.com` and only written to disk after
   image signature validation.
+- All bottle photos (label scans, uploads, Vivino covers, restored covers) are stored privately in
+  `<config>/homecave/covers/` and served only by the authenticated `/api/homecave/cover/` view,
+  using short-lived signed URLs (24 h, reused for 12 h). Nothing is published under `/local/`.
 - AI provider API keys are stored in the Home Assistant config entry and sent only in request
   headers to the configured provider.

@@ -416,8 +416,6 @@ def restore_backup_archive(
     target_db_path = getattr(db, "db_path", None) or (db_dir / DB_FILENAME)
     covers_dir = config_dir / COVERS_SUBDIR
     covers_dir.mkdir(parents=True, exist_ok=True)
-    alt_covers_dir = config_dir / "covers"
-    alt_covers_dir.mkdir(parents=True, exist_ok=True)
 
     if isinstance(zip_source, bytes):
         if len(zip_source) > MAX_BACKUP_ARCHIVE_BYTES:
@@ -472,8 +470,6 @@ def restore_backup_archive(
                     )
                 dest = covers_dir / clean_img_name
                 dest.write_bytes(data)
-                alt_dest = alt_covers_dir / clean_img_name
-                alt_dest.write_bytes(data)
                 restored_images += 1
 
         if db_bytes is not None:
@@ -690,7 +686,7 @@ def download_and_save_cover_image(
     image_url: str,
     timeout_sec: float = 6.0,
 ) -> str:
-    """Download a cover image from Vivino's image CDN and save it to <config>/www/homecave/covers/.
+    """Download a cover image from Vivino's image CDN into private <config>/homecave/covers/.
 
     Security model (SSRF / stored-file hardening):
     - Only ``https://images.vivino.com/...`` is ever fetched; any other URL returns ``""``
@@ -699,7 +695,7 @@ def download_and_save_cover_image(
     - Only bytes that pass JPEG/PNG/WebP magic-header validation are written (fail closed),
       under a hashed filename whose extension is derived from the image bytes.
 
-    Returns the public /local/ URL on success; the original (allowed) URL if the download
+    Returns the authenticated /api/homecave/cover/ path on success; the original (allowed) URL if the download
     failed; or ``""`` when the URL is not an allowed cover source.
     """
     if not image_url or not isinstance(image_url, str):
@@ -715,7 +711,7 @@ def download_and_save_cover_image(
         for existing_ext in (".jpg", ".png", ".webp"):
             existing = covers_dir / f"vivino_{url_digest}{existing_ext}"
             if existing.is_file() and existing.stat().st_size > 0:
-                return f"/local/homecave/covers/{existing.name}"
+                return f"/api/homecave/cover/{existing.name}"
 
         opener = urllib.request.build_opener(_NoRedirectHandler)
         delays = [0, 3, 5]
@@ -743,7 +739,7 @@ def download_and_save_cover_image(
                     return clean_url
                 filename = f"vivino_{url_digest}{ext}"
                 (covers_dir / filename).write_bytes(data)
-                return f"/local/homecave/covers/{filename}"
+                return f"/api/homecave/cover/{filename}"
             except Exception as err:
                 last_err = err
                 _LOGGER.debug(
@@ -971,7 +967,7 @@ def import_vivino_full_wine_list_csv(
                     try:
                         res_url = future.result()
                         url_map[u] = res_url
-                        if res_url.startswith("/local/"):
+                        if res_url.startswith("/api/homecave/cover/"):
                             downloaded_images += 1
                     except Exception as err:
                         _LOGGER.debug("Cover download error for %s: %s", u, err)
@@ -1191,7 +1187,7 @@ def import_vivino_export_zip(
 
     1. vivino_data/full_wine_list.csv -> labeled and stored as 'tasted' wines (quantity 0).
     2. vivino_data/cellar.csv -> populated into active cellar inventory with stock batches.
-    3. Label image -> downloaded and saved to <config>/www/homecave/covers/.
+    3. Label image -> downloaded and saved to private <config>/homecave/covers/.
     """
     if progress_callback:
         progress_callback({

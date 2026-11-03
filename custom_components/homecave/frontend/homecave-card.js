@@ -1,5 +1,5 @@
 /**
- * HomeCave — Local Wine Cellar, AI Label Scanner & SommAI Lovelace Cards (`custom:homecave-card`, v0.9.4)
+ * HomeCave — Local Wine Cellar, AI Label Scanner & SommAI Lovelace Cards (`custom:homecave-card`, v0.9.5)
  * Built using native Home Assistant Web Components (<ha-card>, <ha-icon>) and HA CSS variables.
  */
 
@@ -49,13 +49,14 @@ function safeExternalUrl(value) {
   return "";
 }
 
-// Image sources are restricted to local cover files, Vivino's image CDN,
+// Image sources are restricted to private HomeCave covers, Vivino's image CDN,
 // in-memory blob: URLs and strict base64 raster data: URLs (no SVG).
 function safeImageUrl(value) {
   if (!value) return "";
   const raw = String(value).trim();
-  if (raw.startsWith("/local/homecave/covers/")) {
-    if (raw.includes("..") || raw.includes("\\")) return "";
+  // Private covers are served by the authenticated /api/homecave/cover/ view, loaded via
+  // short-lived signed URLs (?authSig=...) that the server adds to every response.
+  if (/^\/api\/homecave\/cover\/[A-Za-z0-9_-]{1,80}\.(jpg|jpeg|png|webp)(\?authSig=[A-Za-z0-9._-]+)?$/.test(raw)) {
     return escapeHtml(raw);
   }
   if (/^data:image\/(png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=\s]+$/i.test(raw)) {

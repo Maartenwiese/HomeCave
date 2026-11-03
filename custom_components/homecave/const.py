@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "homecave"
 NAME: Final = "HomeCave"
-VERSION: Final = "0.9.4"
+VERSION: Final = "0.9.5"
 
 # Config & Options keys
 CONF_CELLAR_NAME: Final = "cellar_name"
@@ -44,7 +44,9 @@ CLAUDE_API_BASE_URL: Final = "https://api.anthropic.com/v1/messages"
 # Storage & Static Paths
 STORAGE_DIR_NAME: Final = "homecave"
 DB_FILENAME: Final = "homecave.db"
-COVERS_SUBDIR: Final = "www/homecave/covers"
+COVERS_SUBDIR: Final = "homecave/covers"  # private: never served by /local/
+LEGACY_PUBLIC_COVERS_SUBDIR: Final = "www/homecave/covers"  # pre-v0.9.5 public location
+COVER_URL_TTL_SECONDS: Final = 24 * 3600  # signed cover URLs (reused for half this time)
 EXPORTS_SUBDIR: Final = "homecave/exports"
 BACKUPS_SUBDIR: Final = "homecave/backups"
 LEGACY_EXPORTS_SUBDIR: Final = "www/homecave/exports"

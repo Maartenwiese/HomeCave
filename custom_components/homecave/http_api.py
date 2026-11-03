@@ -48,6 +48,7 @@ from .const import (
     VERSION,
 )
 from .coordinator import WineInventoryCoordinator
+from .covers import get_cover_signer, is_valid_cover_name, read_private_cover, sign_cover_urls
 from .scanner import LLMScannerError
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,6 +87,57 @@ def _safe_action(action: Any) -> str:
 
 def _too_long(value: Any, limit: int) -> bool:
     return isinstance(value, str) and len(value) > limit
+
+
+def _read_static_asset(file_path: Path) -> bytes | None:
+    """Executor helper: check and read a bundled PWA asset in one blocking job."""
+    if not file_path.is_file():
+        return None
+    return file_path.read_bytes()
+
+
+_FORBIDDEN = object()
+
+
+def _resolve_and_read_private(
+    config_dir: Path, filename: str, allowed: tuple[str, ...]
+) -> Any:
+    """Executor helper: sandbox-resolve, check, and read a private download in one job.
+
+    Returns the file bytes, ``None`` when missing, or ``_FORBIDDEN`` for paths outside the
+    allowed HomeCave storage folders.
+    """
+    try:
+        safe_file = resolve_safe_storage_path(config_dir, filename, allowed_subdirs=allowed)
+    except ValueError:
+        return _FORBIDDEN
+    if not safe_file.is_file():
+        return None
+    return safe_file.read_bytes()
+
+
+async def _async_run_blocking(hass: Any, func: Any, *args: Any) -> Any:
+    """Run blocking I/O in Home Assistant's executor (direct call only in hass-less unit tests)."""
+    if hass is not None and hasattr(hass, "async_add_executor_job"):
+        return await hass.async_add_executor_job(func, *args)
+    return func(*args)
+
+
+def _sign_for_request(hass: Any, request: web.Request, data: Any) -> Any:
+    """Sign private cover ``image_url`` values with the requesting session's refresh token."""
+    try:
+        refresh_token_id = request.get("hass_refresh_token_id")
+    except Exception:  # noqa: BLE001
+        refresh_token_id = None
+    return sign_cover_urls(data, get_cover_signer(hass), refresh_token_id)
+
+
+def _image_content_type(data: bytes) -> str:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
 
 MOBILE_FRONTEND_DIR = Path(__file__).parent / "frontend" / "mobile"
 
@@ -435,17 +487,14 @@ class WineInventoryMobileAssetView(HomeAssistantView):
             return web.Response(status=403, text="Forbidden")
 
         file_path = MOBILE_FRONTEND_DIR / clean_name
-        if not file_path.is_file():
+        # is_file() + read_bytes() run together in the executor (never on the event loop)
+        body = await _async_run_blocking(self.hass, _read_static_asset, file_path)
+        if body is None:
             return web.Response(status=404, text="Not Found")
 
         content_type, charset = CONTENT_TYPES.get(
             file_path.suffix.lower(), ("application/octet-stream", None)
         )
-        hass = self.hass
-        if hass is not None and hasattr(hass, "async_add_executor_job"):
-            body = await hass.async_add_executor_job(file_path.read_bytes)
-        else:
-            body = file_path.read_bytes()
 
         headers: dict[str, str] = {
             "Cache-Control": "no-cache",
@@ -521,7 +570,7 @@ class WineInventoryPwaApiView(HomeAssistantView):
                 authenticated_user=user_name,
                 user=hass_user,
             )
-            return self._json_no_store(data, status)
+            return self._json_no_store(_sign_for_request(hass, request, data), status)
         except Exception as err:  # noqa: BLE001
             _LOGGER.exception("Mobile PWA GET %r failed", _safe_action(action))
             status = 400 if isinstance(err, USER_FACING_ERRORS) else 500
@@ -538,7 +587,7 @@ class WineInventoryPwaApiView(HomeAssistantView):
             status, data = await async_handle_pwa_post(
                 hass, action, dict(payload or {}), user=hass_user
             )
-            return self._json_no_store(data, status)
+            return self._json_no_store(_sign_for_request(hass, request, data), status)
         except Exception as err:  # noqa: BLE001
             _LOGGER.exception("Mobile PWA POST %r failed", _safe_action(action))
             status = 400 if isinstance(err, USER_FACING_ERRORS) else 500
@@ -591,22 +640,16 @@ class WineInventoryDownloadView(HomeAssistantView):
             return self.json({"error": "Not Found"}, status_code=404)
 
         config_dir = Path(getattr(hass.config, "config_dir", "."))
-        try:
-            safe_file = resolve_safe_storage_path(
-                config_dir, clean_name, allowed_subdirs=allowed
-            )
-        except ValueError:
+        # resolve + is_file + read in a single executor job (never on the event loop)
+        body = await _async_run_blocking(
+            hass, _resolve_and_read_private, config_dir, clean_name, allowed
+        )
+        if body is _FORBIDDEN:
             return self.json({"error": "Forbidden"}, status_code=403)
-
-        if not safe_file.exists() or not safe_file.is_file():
+        if body is None:
             return self.json({"error": "Not Found"}, status_code=404)
 
-        if hasattr(hass, "async_add_executor_job"):
-            body = await hass.async_add_executor_job(safe_file.read_bytes)
-        else:
-            body = safe_file.read_bytes()
-
-        suffix = safe_file.suffix.lower()
+        suffix = Path(clean_name).suffix.lower()
         content_type = (
             "application/zip"
             if suffix == ".zip"
@@ -627,10 +670,60 @@ class WineInventoryDownloadView(HomeAssistantView):
         )
 
 
+class WineInventoryCoverView(HomeAssistantView):
+    """Authenticated endpoint serving private bottle/cover photos from <config>/homecave/covers/.
+
+    Browsers load these via ``<img src>`` using short-lived signed URLs (``?authSig=``) that the
+    WebSocket/PWA responses inject; Home Assistant's auth middleware validates the signature.
+    Any logged-in Home Assistant user may view covers (same audience as the cellar itself).
+    """
+
+    url = "/api/homecave/cover/{filename}"
+    name = "api:homecave:cover"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant | None = None) -> None:
+        """Keep a direct hass reference."""
+        self.hass = hass
+
+    def _get_hass(self, request: web.Request) -> HomeAssistant:
+        if self.hass is not None:
+            return self.hass
+        try:
+            from homeassistant.helpers.http import KEY_HASS  # noqa: PLC0415
+
+            return request.app[KEY_HASS]
+        except (ImportError, KeyError):
+            return request.app["hass"]
+
+    async def get(self, request: web.Request, filename: str) -> web.StreamResponse:
+        """Serve a validated private cover image."""
+        if not is_valid_cover_name(filename):
+            return web.Response(status=404, text="Not Found")
+        hass = self._get_hass(request)
+        config_dir = Path(getattr(hass.config, "config_dir", "."))
+        # validate + is_file + read run in one executor job (never on the event loop)
+        body = await _async_run_blocking(hass, read_private_cover, config_dir, filename)
+        if not body:
+            return web.Response(status=404, text="Not Found")
+        return web.Response(
+            body=body,
+            content_type=_image_content_type(body),
+            headers={
+                "Cache-Control": "private, max-age=43200",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Security-Policy": "default-src 'none'; sandbox",
+                "Content-Disposition": "inline",
+                "Referrer-Policy": "same-origin",
+            },
+        )
+
+
 def async_register_http_views(hass: HomeAssistant) -> None:
-    """Register HTTP views for the standalone mobile PWA and authenticated downloads."""
+    """Register HTTP views for the standalone mobile PWA, covers, and authenticated downloads."""
     if not hasattr(hass, "http") or hass.http is None:
         return
     hass.http.register_view(WineInventoryMobileAssetView(hass))
     hass.http.register_view(WineInventoryPwaApiView(hass))
     hass.http.register_view(WineInventoryDownloadView(hass))
+    hass.http.register_view(WineInventoryCoverView(hass))

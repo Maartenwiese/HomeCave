@@ -173,7 +173,9 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
             self.assertEqual(raw, sample_bytes)
 
             local_url = save_bottle_cover_image(Path(tmpdir), raw, mime)
-            self.assertTrue(local_url.startswith("/local/homecave/covers/bottle_"))
+            self.assertTrue(local_url.startswith("/api/homecave/cover/bottle_"))
+            self.assertTrue((Path(tmpdir) / "homecave" / "covers" / Path(local_url).name).exists())
+            self.assertFalse((Path(tmpdir) / "www").exists())
             self.assertTrue(local_url.endswith(".jpg"))
 
     # ---------- deterministic pre-filter against real Vivino result sets ----------
@@ -827,8 +829,8 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
                 mock_sleep.assert_any_call(3)
                 mock_sleep.assert_any_call(5)
                 # v0.9.3: hashed filename, extension derived from the image magic bytes
-                self.assertRegex(saved_url, r"^/local/homecave/covers/vivino_[0-9a-f]{24}\.jpg$")
-                cover_file = config_dir / "www" / "homecave" / "covers" / Path(saved_url).name
+                self.assertRegex(saved_url, r"^/api/homecave/cover/vivino_[0-9a-f]{24}\.jpg$")
+                cover_file = config_dir / "homecave" / "covers" / Path(saved_url).name
                 self.assertTrue(cover_file.exists())
                 self.assertEqual(cover_file.read_bytes(), valid_jpeg)
 
@@ -1009,7 +1011,7 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
                         await coordinator.async_scan_bottle(image_data=b64_img)
 
                 # Ensure covers dir exists but has no orphaned files from failed scan
-                covers_dir = config_dir / "www" / "homecave" / "covers"
+                covers_dir = config_dir / "homecave" / "covers"
                 if covers_dir.exists():
                     self.assertEqual(len(list(covers_dir.glob("*.jpg"))), 0)
 
@@ -1031,12 +1033,13 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
                     wine_id,
                     {"image_data": b64_img, "personal_rating": 4.8},
                 )
-                self.assertTrue(updated["image_url"].startswith("/local/homecave/covers/"))
+                self.assertTrue(updated["image_url"].startswith("/api/homecave/cover/"))
                 self.assertEqual(updated["personal_rating"], 4.8)
 
                 # Check on disk
                 cover_filename = Path(updated["image_url"]).name
-                disk_file = config_dir / "www" / "homecave" / "covers" / cover_filename
+                disk_file = config_dir / "homecave" / "covers" / cover_filename
+                self.assertFalse((config_dir / "www" / "homecave" / "covers").exists())
                 self.assertTrue(disk_file.exists())
                 self.assertEqual(disk_file.read_bytes(), jpeg_header)
 

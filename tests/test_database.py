@@ -397,7 +397,7 @@ class TestWineDatabase(unittest.TestCase):
             self.assertEqual(updated_bad["vivino_url"], "")
             self.assertEqual(updated_bad["image_url"], "")
 
-            # 3. Valid https://www.vivino.com/... and /local/homecave/covers/... are preserved
+            # 3. Valid https://www.vivino.com/... preserved; legacy /local/ covers canonicalised (v0.9.5)
             updated_good = db.update_wine(
                 bad["id"],
                 {
@@ -406,7 +406,7 @@ class TestWineDatabase(unittest.TestCase):
                 },
             )
             self.assertEqual(updated_good["vivino_url"], "https://www.vivino.com/w/1652?year=2019")
-            self.assertEqual(updated_good["image_url"], "/local/homecave/covers/cover_1.jpg")
+            self.assertEqual(updated_good["image_url"], "/api/homecave/cover/cover_1.jpg")
 
     def test_v038_tasted_section_and_consumed_from_cellar(self) -> None:
         """v0.3.8: Verify scanning/adding directly to Tasted (0 stock) and cellar wines consumed by 1+ showing in Tasted."""
@@ -644,7 +644,7 @@ class TestWineDatabase(unittest.TestCase):
             house = next(w for w in wines if w["name"] == "House Red")
 
             self.assertTrue(palmer["is_imported"])
-            self.assertEqual(palmer["image_url"], "/local/homecave/covers/vivino_palmer.jpg")
+            self.assertEqual(palmer["image_url"], "/api/homecave/cover/vivino_palmer.jpg")
             self.assertTrue(grange["is_imported"])
             self.assertFalse(house["is_imported"])
 

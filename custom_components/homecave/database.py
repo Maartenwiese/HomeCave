@@ -20,6 +20,7 @@ from .const import (
     WINE_TYPE_RED,
     WINE_TYPES,
 )
+from .covers import normalize_cover_ref
 
 
 def utc_now_iso() -> str:
@@ -71,18 +72,20 @@ def _sanitize_vivino_url(url: Any) -> str:
 
 
 def _sanitize_image_url(url: Any) -> str:
-    """Allow only HomeCave cover paths, Vivino's image CDN, or base64 raster image data URIs.
+    """Allow only private HomeCave cover paths, Vivino's image CDN, or raster data URIs.
 
+    Private covers are always stored in canonical, unsigned form ``/api/homecave/cover/<file>``:
+    any ``?authSig=...`` echoed back by a client is stripped, and legacy public
+    ``/local/homecave/covers/`` / ``/local/wine_inventory/covers/`` paths are mapped to it.
     Arbitrary external hosts are rejected so a stored image URL can never act as a tracking
     pixel (or other third-party request) inside the Home Assistant origin.
     """
     raw = str(url or "").strip()
     if not raw or any(ch in raw for ch in ("\r", "\n", "\x00", "<", ">", '"', "'", "\\")):
         return ""
-    if raw.startswith(("/local/homecave/covers/", "/local/wine_inventory/covers/")):
-        if ".." in raw or "//" in raw[1:]:
-            return ""
-        return raw
+    cover_ref = normalize_cover_ref(raw)
+    if cover_ref is not None:
+        return cover_ref  # canonical path, or "" for an invalid cover filename
     if re.match(r"^data:image/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=\s]+$", raw, re.IGNORECASE):
         return raw
     try:
@@ -293,6 +296,14 @@ class WineDatabase:
             UPDATE wines
             SET image_url = REPLACE(image_url, '/local/wine_inventory/covers/', '/local/homecave/covers/')
             WHERE image_url LIKE '/local/wine_inventory/covers/%'
+            """
+        )
+        # v0.9.5: covers moved from public www/ to private storage served by an authenticated view
+        conn.execute(
+            """
+            UPDATE wines
+            SET image_url = REPLACE(image_url, '/local/homecave/covers/', '/api/homecave/cover/')
+            WHERE image_url LIKE '/local/homecave/covers/%'
             """
         )
 

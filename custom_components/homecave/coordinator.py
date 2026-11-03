@@ -48,10 +48,12 @@ from .const import (
 )
 from .const import (
     BACKUP_DOWNLOAD_URL_TTL_SECONDS,
+    COVERS_SUBDIR,
     MAX_AI_ENRICH_PER_IMPORT,
     MAX_DECANT_MINUTES,
     MAX_PAIRING_TEXT_CHARS,
 )
+from .covers import delete_private_cover, migrate_public_covers
 from .database import WineDatabase, utc_now_iso
 from .scanner import (
     ClaudeScannerError,
@@ -70,6 +72,14 @@ from .scanner import (
 from .vivino import async_fetch_vivino_wine, async_lookup_vivino, build_wine_url
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _resolve_existing_backup_name(config_dir: Path, filename: str) -> str | None:
+    """Executor helper: sandbox-resolve a backup filename and confirm it exists (blocking I/O)."""
+    from .backup import resolve_safe_storage_path
+
+    safe_path = resolve_safe_storage_path(config_dir, filename)
+    return safe_path.name if safe_path.is_file() else None
 
 _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
@@ -199,7 +209,8 @@ class WineInventoryCoordinator:
                     self.db_path.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(legacy_db, self.db_path)
             legacy_covers = config_dir / "www" / "wine_inventory" / "covers"
-            new_covers = config_dir / "www" / "homecave" / "covers"
+            # Covers are private since v0.9.5: never copy them into <config>/www/
+            new_covers = config_dir / COVERS_SUBDIR
             if legacy_covers.is_dir():
                 new_covers.mkdir(parents=True, exist_ok=True)
                 for img in legacy_covers.iterdir():
@@ -342,6 +353,14 @@ class WineInventoryCoordinator:
 
     async def async_initialize(self) -> None:
         """Initialize the SQLite schema and load initial statistics."""
+        # Security (v0.9.5): move any cover photos out of the public <config>/www/ folder
+        config_dir = Path(getattr(self.hass.config, "config_dir", "."))
+        moved = await self.hass.async_add_executor_job(migrate_public_covers, config_dir)
+        if moved:
+            _LOGGER.warning(
+                "HomeCave moved %d bottle photos from public www/ to private homecave/covers",
+                moved,
+            )
         await self.hass.async_add_executor_job(self.db.initialize)
         await self.async_refresh()
 
@@ -416,13 +435,10 @@ class WineInventoryCoordinator:
             )
         except Exception:
             if saved_image_url:
-                try:
-                    cover_filename = Path(saved_image_url).name
-                    cover_path = config_dir / "www" / "homecave" / "covers" / cover_filename
-                    if cover_path.exists():
-                        cover_path.unlink()
-                except Exception:
-                    pass
+                # Filesystem calls must not run on the event loop
+                await self.hass.async_add_executor_job(
+                    delete_private_cover, config_dir, saved_image_url
+                )
             raise
 
         extracted["image_url"] = saved_image_url
@@ -955,15 +971,14 @@ class WineInventoryCoordinator:
         ``/api/homecave/download/backup/<file>?authSig=...`` path is signed with Home Assistant's
         ``async_sign_path`` (5-minute expiry) and still enforces the admin check in the view.
         """
-        from .backup import resolve_safe_storage_path
-
         config_dir = Path(getattr(self.hass.config, "config_dir", "."))
-        safe_path = await self.hass.async_add_executor_job(
-            resolve_safe_storage_path, config_dir, filename
+        # resolve() + is_file() run together in one executor job (never on the event loop)
+        safe_name = await self.hass.async_add_executor_job(
+            _resolve_existing_backup_name, config_dir, filename
         )
-        if not safe_path.is_file():
-            raise FileNotFoundError(f"Backup archive {safe_path.name} not found.")
-        path = f"/api/homecave/download/backup/{safe_path.name}"
+        if safe_name is None:
+            raise FileNotFoundError(f"Backup archive {Path(str(filename)).name} not found.")
+        path = f"/api/homecave/download/backup/{safe_name}"
         try:
             from homeassistant.components.http.auth import async_sign_path
         except ImportError:  # pragma: no cover - only outside Home Assistant (unit tests)

@@ -114,7 +114,7 @@ class TestA01SsrfAndPublicFileWrite(unittest.TestCase):
                 ):
                     self.assertEqual(download_and_save_cover_image(config_dir, url), "")
                 opener.assert_not_called()
-            covers = config_dir / "www" / "homecave" / "covers"
+            covers = config_dir / "homecave" / "covers"
             self.assertFalse(covers.exists() and any(covers.iterdir()))
 
     def test_non_image_response_from_allowed_host_is_never_written(self) -> None:
@@ -130,7 +130,7 @@ class TestA01SsrfAndPublicFileWrite(unittest.TestCase):
                     config_dir, "https://images.vivino.com/labels/evil.html"
                 )
             self.assertFalse(res.startswith("/local/"))
-            covers = config_dir / "www" / "homecave" / "covers"
+            covers = config_dir / "homecave" / "covers"
             self.assertEqual(list(covers.glob("*")) if covers.exists() else [], [])
 
     def test_valid_image_saved_with_hashed_name_and_magic_extension(self) -> None:
@@ -145,8 +145,8 @@ class TestA01SsrfAndPublicFileWrite(unittest.TestCase):
                 res = download_and_save_cover_image(
                     config_dir, "https://images.vivino.com/labels/looks_like.svg"
                 )
-            self.assertRegex(res, r"^/local/homecave/covers/vivino_[0-9a-f]{24}\.jpg$")
-            self.assertTrue((config_dir / "www" / "homecave" / "covers" / Path(res).name).exists())
+            self.assertRegex(res, r"^/api/homecave/cover/vivino_[0-9a-f]{24}\.jpg$")
+            self.assertTrue((config_dir / "homecave" / "covers" / Path(res).name).exists())
             # The opener is built with the no-redirect handler (SSRF pivot protection)
             handler_names = [getattr(a, "__name__", "") for a in build.call_args.args]
             self.assertIn("_NoRedirectHandler", handler_names)
@@ -352,9 +352,14 @@ class TestA05Injection(unittest.TestCase):
             self.assertIsInstance(rec["decant_minutes"], int)
 
     def test_image_url_allowlist(self) -> None:
+        # v0.9.5: covers are private; legacy /local/ paths are canonicalised, signatures stripped
         self.assertEqual(
             _sanitize_image_url("/local/homecave/covers/vivino_ab.jpg"),
-            "/local/homecave/covers/vivino_ab.jpg",
+            "/api/homecave/cover/vivino_ab.jpg",
+        )
+        self.assertEqual(
+            _sanitize_image_url("/api/homecave/cover/vivino_ab.jpg?authSig=abc.def"),
+            "/api/homecave/cover/vivino_ab.jpg",
         )
         self.assertTrue(_sanitize_image_url("https://images.vivino.com/thumbs/x.png"))
         for bad in (

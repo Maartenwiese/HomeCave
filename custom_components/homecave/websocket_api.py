@@ -87,6 +87,7 @@ from .const import (
     MAX_TEXT_FIELD_CHARS,
 )
 from .coordinator import WineInventoryCoordinator
+from .covers import get_cover_signer, sign_cover_urls
 from .scanner import LLMScannerError
 
 _LOGGER = logging.getLogger(__name__)
@@ -142,6 +143,23 @@ def _bounded_updates(value: Any) -> Any:
         if item is not None and not isinstance(item, (str, int, float, bool, list)):
             raise vol.Invalid(f"field '{key}' has an unsupported type")
     return value
+
+
+def _read_backup_if_small(zip_path: Any, limit: int) -> bytes | None:
+    """Executor helper: return backup bytes when the file exists and is at most ``limit`` bytes."""
+    if not str(zip_path) or not zip_path.is_file() or zip_path.stat().st_size > limit:
+        return None
+    return zip_path.read_bytes()
+
+
+def _send_result(hass: Any, connection: Any, msg_id: int, payload: Any) -> None:
+    """Send a WebSocket result with private cover ``image_url`` values signed for this session."""
+    payload = sign_cover_urls(
+        payload,
+        get_cover_signer(hass),
+        getattr(connection, "refresh_token_id", None),
+    )
+    connection.send_result(msg_id, payload)
 
 
 def _require_admin_user(connection: Any, msg: dict[str, Any]) -> bool:
@@ -215,7 +233,7 @@ async def ws_list_wines(
                 search=msg.get("search"),
             )
         )
-        connection.send_result(
+        _send_result(hass, connection, 
             msg["id"],
             {
                 "cellar_name": coordinator.cellar_name,
@@ -253,7 +271,7 @@ async def ws_get_wine_detail(
         if detail is None:
             connection.send_error(msg["id"], "not_found", "Wine not found")
             return
-        connection.send_result(msg["id"], {"wine": detail})
+        _send_result(hass, connection, msg["id"], {"wine": detail})
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "detail_failed", _ws_error_message(err))
 
@@ -280,7 +298,7 @@ async def ws_scan_bottle(
             camera_entity_id=msg.get("camera_entity_id"),
             user=getattr(connection, "user", None),
         )
-        connection.send_result(msg["id"], result)
+        _send_result(hass, connection, msg["id"], result)
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "scan_failed", _ws_error_message(err))
 
@@ -332,7 +350,7 @@ async def ws_add_wine(
     try:
         coordinator = _get_coordinator(hass, msg.get("entry_id"))
         wine = await coordinator.async_add_wine(msg)
-        connection.send_result(
+        _send_result(hass, connection, 
             msg["id"],
             {"wine": wine, "statistics": coordinator.statistics},
         )
@@ -366,7 +384,7 @@ async def ws_adjust_quantity(
     try:
         coordinator = _get_coordinator(hass, msg.get("entry_id"))
         wine = await coordinator.async_adjust_quantity(msg)
-        connection.send_result(
+        _send_result(hass, connection, 
             msg["id"],
             {"wine": wine, "statistics": coordinator.statistics},
         )
@@ -395,7 +413,7 @@ async def ws_update_wine(
             int(msg["wine_id"]),
             dict(msg["updates"]),
         )
-        connection.send_result(
+        _send_result(hass, connection, 
             msg["id"],
             {"wine": wine, "statistics": coordinator.statistics},
         )
@@ -423,7 +441,7 @@ async def ws_delete_wine(
     try:
         coordinator = _get_coordinator(hass, msg.get("entry_id"))
         deleted = await coordinator.async_delete_wine(int(msg["wine_id"]))
-        connection.send_result(
+        _send_result(hass, connection, 
             msg["id"],
             {"deleted": deleted, "statistics": coordinator.statistics},
         )
@@ -448,7 +466,7 @@ async def ws_unlink_vivino(
     try:
         coordinator = _get_coordinator(hass, msg.get("entry_id"))
         wine = await coordinator.async_unlink_vivino(int(msg["wine_id"]))
-        connection.send_result(
+        _send_result(hass, connection, 
             msg["id"],
             {"wine": wine, "statistics": coordinator.statistics},
         )
@@ -474,7 +492,7 @@ async def ws_link_vivino_url(
     try:
         coordinator = _get_coordinator(hass, msg.get("entry_id"))
         result = await coordinator.async_link_vivino_url(int(msg["wine_id"]), str(msg["url"]))
-        connection.send_result(msg["id"], {**result, "statistics": coordinator.statistics})
+        _send_result(hass, connection, msg["id"], {**result, "statistics": coordinator.statistics})
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "link_failed", _ws_error_message(err))
 
@@ -496,7 +514,7 @@ async def ws_research_wine(
     try:
         coordinator = _get_coordinator(hass, msg.get("entry_id"))
         result = await coordinator.async_research_wine(int(msg["wine_id"]))
-        connection.send_result(msg["id"], result)
+        _send_result(hass, connection, msg["id"], result)
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "research_failed", _ws_error_message(err))
 
@@ -518,7 +536,7 @@ async def ws_refresh_vivino(
     try:
         coordinator = _get_coordinator(hass, msg.get("entry_id"))
         res = await coordinator.async_refresh_vivino(msg.get("wine_id"))
-        connection.send_result(msg["id"], res)
+        _send_result(hass, connection, msg["id"], res)
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "vivino_refresh_failed", _ws_error_message(err))
 
@@ -546,10 +564,13 @@ async def ws_create_backup(
         coordinator = _get_coordinator(hass, msg.get("entry_id"))
         res = dict(await coordinator.async_create_backup())
         zip_path = Path(str(res.get("file_path") or ""))
-        if zip_path.is_file() and zip_path.stat().st_size <= 20 * 1024 * 1024:
-            raw_bytes = await hass.async_add_executor_job(zip_path.read_bytes)
+        # is_file() + stat() + read run together in one executor job (never on the event loop)
+        raw_bytes = await hass.async_add_executor_job(
+            _read_backup_if_small, zip_path, 20 * 1024 * 1024
+        )
+        if raw_bytes is not None:
             res["archive_base64"] = base64.b64encode(raw_bytes).decode("ascii")
-        connection.send_result(msg["id"], res)
+        _send_result(hass, connection, msg["id"], res)
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "backup_failed", _ws_error_message(err))
 
@@ -590,7 +611,7 @@ async def ws_restore_backup(
         else:
             raise ValueError("Either 'file_path' or 'zip_data' must be provided.")
 
-        connection.send_result(msg["id"], res)
+        _send_result(hass, connection, msg["id"], res)
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "restore_failed", _ws_error_message(err))
 
@@ -648,7 +669,7 @@ async def ws_import_wines(
         else:
             raise ValueError("No import payload provided.")
 
-        connection.send_result(msg["id"], res)
+        _send_result(hass, connection, msg["id"], res)
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "import_failed", _ws_error_message(err))
 
@@ -672,7 +693,7 @@ async def ws_list_backups(
     try:
         coordinator = _get_coordinator(hass, msg.get("entry_id"))
         res = await coordinator.async_list_backups()
-        connection.send_result(msg["id"], {"backups": res})
+        _send_result(hass, connection, msg["id"], {"backups": res})
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "list_backups_failed", _ws_error_message(err))
 
@@ -704,6 +725,6 @@ async def ws_sommelier_chat(
             image_data=image_data,
             conversation_history=history,
         )
-        connection.send_result(msg["id"], res)
+        _send_result(hass, connection, msg["id"], res)
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "sommelier_chat_failed", _ws_error_message(err))

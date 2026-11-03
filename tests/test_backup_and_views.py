@@ -80,7 +80,7 @@ class TestBackupRestoreAndViews(unittest.TestCase):
             dummy_cover.write_bytes(b"\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01DUMMY_IMAGE_DATA")
 
             # Update DB with image path
-            db.update_wine(w1["id"], {"image_url": f"/local/homecave/covers/{dummy_cover.name}"})
+            db.update_wine(w1["id"], {"image_url": f"/api/homecave/cover/{dummy_cover.name}"})
 
             # 2. Create full backup archive
             backup_meta = create_backup_archive(src_path, db)
@@ -117,7 +117,9 @@ class TestBackupRestoreAndViews(unittest.TestCase):
             self.assertEqual(restore_meta["wines_count"], 1)
             self.assertEqual(restore_meta["restored_images"], 1)
             self.assertTrue(dest_db_file.exists())
-            self.assertTrue((dest_path / "covers" / dummy_cover.name).exists())
+            # v0.9.5: restored covers land in private <config>/homecave/covers/
+            self.assertTrue((dest_path / "homecave" / "covers" / dummy_cover.name).exists())
+            self.assertFalse((dest_path / "www").exists())
 
             # Validate destination DB query
             restored_wines = dest_db.list_wines()
@@ -867,9 +869,11 @@ class TestBackupRestoreAndViews(unittest.TestCase):
             asyncio.run(coord.async_initialize())
 
             self.assertTrue((cfg / "homecave" / "homecave.db").exists())
-            self.assertTrue((cfg / "www" / "homecave" / "covers" / "bottle_legacy.jpg").exists())
+            # v0.9.5: legacy covers migrate into private storage, never into www/
+            self.assertTrue((cfg / "homecave" / "covers" / "bottle_legacy.jpg").exists())
+            self.assertFalse((cfg / "www" / "homecave" / "covers").exists())
             self.assertEqual(len(coord.wines), 1)
-            self.assertEqual(coord.wines[0]["image_url"], "/local/homecave/covers/bottle_legacy.jpg")
+            self.assertEqual(coord.wines[0]["image_url"], "/api/homecave/cover/bottle_legacy.jpg")
 
             # 2. Restoring a legacy backup ZIP containing wine_inventory.db restores into homecave.db
             legacy_zip_buf = io.BytesIO()
@@ -884,7 +888,7 @@ class TestBackupRestoreAndViews(unittest.TestCase):
                 self.assertEqual(res["wines_count"], 1)
                 self.assertEqual(res["restored_images"], 1)
                 restored_wines = rdb.list_wines()
-                self.assertEqual(restored_wines[0]["image_url"], "/local/homecave/covers/bottle_legacy.jpg")
+                self.assertEqual(restored_wines[0]["image_url"], "/api/homecave/cover/bottle_legacy.jpg")
 
 
 if __name__ == "__main__":
