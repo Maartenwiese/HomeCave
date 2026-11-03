@@ -39,11 +39,11 @@ A great wine collection shouldn't live in a forgotten spreadsheet or remain lock
 - **Seamless Vivino Import:** Moving over from an existing collection? Import your wine data directly from Vivino to populate your cellar and tasting history in minutes without starting from scratch.
 - **Native-Feel Mobile PWA:** While fully integrated into Home Assistant, HomeCave includes a dedicated Progressive Web App (PWA) you can install straight to your phone's home screen. It gives you a fast, app-like interface right in the cellar or at the dining table, making native device features feel effortless.
 
+HomeCave uses LLMs for image recognition and AI-generated wine advice. To get started, you will need a Gemini or Claude API key directly from Google or Anthropic. Because it relies on lightweight, highly efficient models, running it is fast and remarkably inexpensive.
+
 ---
 
 **HomeCave** (`homecave`, version `0.9.6`) is a native Home Assistant custom integration, bundled Lovelace frontend card suite (`custom:homecave-card`, `custom:homecave-summary-card`, `custom:homecave-sommai-card`), and standalone Mobile Progressive Web App (`/homecave`) that keeps track of your local wine cellar. It stores your inventory in a local SQLite database (`<config>/homecave/homecave.db`), scans wine bottle photos using **AI vision models** (supporting both **Google Gemini** and **Anthropic Claude**), pairs dishes with your active cellar via **SommAI**, enriches bottles with **Vivino community ratings** and **AI sommelier research**, and tracks every addition with date/time added, where it was bought, physical storage location, drinking window (*Ready*, *Soon*, *Keep*, *Past Peak*), and tasting notes.
-
-Built following the [**`homeassistant-ai/skills`**](https://github.com/homeassistant-ai/skills) (`home-assistant-best-practices`) standards and 100% HACS &amp; Hassfest compliant.
 
 ---
 
