@@ -26,6 +26,19 @@
   </a>
 </p>
 
+HomeCave turns your Home Assistant instance into a local, AI-powered wine cellar manager and personal sommelier. Designed for wine enthusiasts who want full local control over their collection, HomeCave keeps track of every bottle you store, helps you drink your wines at their absolute peak, and pairs what you are cooking tonight directly with what is already on your racks.
+
+## Why HomeCave?
+
+A great wine collection shouldn't live in a forgotten spreadsheet or remain locked behind a subscription cloud app. HomeCave brings your cellar directly into your smart home ecosystem, combining structured inventory management with intelligent oenological insights.
+
+- **Smart Cellar Inventory & Aging Advice:** Know exactly what you have and where it sits. HomeCave tracks your bottles and provides tailored advice on drinking windows and cellaring potential—so you never open a special bottle five years too early or let a prime vintage slip past its peak.
+- **AI Sommelier & Wine Background:** Dive deeper into your collection. Get rich background stories on producers, regions, grape varieties, and vintages, alongside AI-driven inspiration whenever you are browsing your racks.
+- **Cellar-First Food Pairing AI:** Tell HomeCave what is on the menu, and its Food Pairing AI will analyze your dish's flavor profile and recommend the best bottle from your own cellar to pour alongside it.
+- **Dedicated Tasting Log:** Keep a living history of every bottle you uncork. Logged wines move into a dedicated tasted view, allowing you to revisit past bottles, notes, and memories long after the glass is empty.
+- **Seamless Vivino Import:** Moving over from an existing collection? Import your wine data directly from Vivino to populate your cellar and tasting history in minutes without starting from scratch.
+- **Native-Feel Mobile PWA:** While fully integrated into Home Assistant, HomeCave includes a dedicated Progressive Web App (PWA) you can install straight to your phone's home screen. It gives you a fast, app-like interface right in the cellar or at the dining table, making native device features feel effortless.
+
 ---
 
 **HomeCave** (`homecave`, version `0.9.5`) is a native Home Assistant custom integration, bundled Lovelace frontend card suite (`custom:homecave-card`, `custom:homecave-summary-card`, `custom:homecave-sommai-card`), and standalone Mobile Progressive Web App (`/homecave`) that keeps track of your local wine cellar. It stores your inventory in a local SQLite database (`<config>/homecave/homecave.db`), scans wine bottle photos using **AI vision models** (supporting both **Google Gemini** and **Anthropic Claude**), pairs dishes with your active cellar via **SommAI**, enriches bottles with **Vivino community ratings** and **AI sommelier research**, and tracks every addition with date/time added, where it was bought, physical storage location, drinking window (*Ready*, *Soon*, *Keep*, *Past Peak*), and tasting notes.
