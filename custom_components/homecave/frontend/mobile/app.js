@@ -1,5 +1,5 @@
 /**
- * HomeCave Standalone Mobile Web App (PWA) — /homecave/app.js (v0.9.3)
+ * HomeCave Standalone Mobile Web App (PWA) — /homecave/app.js (v0.9.4)
  * Runs parallel to the native Home Assistant UI, inherits Home Assistant OAuth2
  * authentication, defaults to Large (L) text scale, and supports Home Screen installation.
  */

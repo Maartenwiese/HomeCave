@@ -7,6 +7,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import textwrap
 from types import MappingProxyType, SimpleNamespace
 import unittest
 from unittest.mock import MagicMock
@@ -529,6 +530,89 @@ class TestBackupRestoreAndViews(unittest.TestCase):
             vivino_res = asyncio.run(flow.async_step_upload_vivino({"csv_content": csv_content}))
             self.assertEqual(vivino_res["type"], "create_entry")
             self.assertEqual(len(db.list_wines()), 1)
+
+    def test_v094_upload_vivino_file_read_runs_in_executor(self) -> None:
+        """v0.9.4: the Vivino file_path read must run in the executor, never on the event loop."""
+        import ast
+        import inspect
+        import threading
+        from unittest.mock import patch
+
+        import custom_components.homecave.config_flow as config_flow_module
+
+        csv_content = (
+            "Wine Name,Winery / Producer,Vintage,Region,Country,My Rating,Review Text / Notes,Date Logged,Price Paid,Quantity In Cellar\n"
+            'Sassicaia,Tenuta San Guido,2018,Bolgheri,Italy,4.8,"Incredible structure.",2025-05-14,250.0,2\n'
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_dir = Path(tmp_dir)
+            exports_dir = config_dir / "homecave" / "exports"
+            exports_dir.mkdir(parents=True)
+            (exports_dir / "vivino_upload.csv").write_text(csv_content, encoding="utf-8")
+
+            received: list[str] = []
+
+            class _FakeCoordinator:
+                async def async_import_vivino_csv(self, csv_text: str) -> dict:
+                    received.append(csv_text)
+                    return {"imported_count": 1, "cellar_count": 1, "tasted_count": 0}
+
+            class _ExecutorHass:
+                """Runs executor jobs on a real worker thread, like Home Assistant."""
+
+                def __init__(self) -> None:
+                    self.config = SimpleNamespace(config_dir=str(config_dir))
+                    self.data = {DOMAIN: {"entry_v094": {"coordinator": _FakeCoordinator()}}}
+
+                async def async_add_executor_job(self, func, *args):
+                    return await asyncio.get_running_loop().run_in_executor(None, func, *args)
+
+            entry = SimpleNamespace(
+                entry_id="entry_v094",
+                data={"cellar_name": "HomeCave"},
+                options=MappingProxyType({}),
+            )
+            flow = WineInventoryOptionsFlowHandler(entry)
+            flow.hass = _ExecutorHass()
+
+            loop_thread: dict[str, threading.Thread] = {}
+            read_threads: list[threading.Thread] = []
+            real_read_text = Path.read_text
+
+            def _guarded_read_text(path_self: Path, *args, **kwargs):
+                if threading.current_thread() is loop_thread.get("thread"):
+                    raise AssertionError("blocking Path.read_text() on the event loop")
+                read_threads.append(threading.current_thread())
+                return real_read_text(path_self, *args, **kwargs)
+
+            async def _run() -> dict:
+                loop_thread["thread"] = threading.current_thread()
+                with patch.object(Path, "read_text", _guarded_read_text):
+                    return await flow.async_step_upload_vivino(
+                        {"file_path": "homecave/exports/vivino_upload.csv"}
+                    )
+
+            result = asyncio.run(_run())
+            self.assertEqual(result["type"], "create_entry")
+            self.assertEqual(received, [csv_content])
+            self.assertEqual(len(read_threads), 1)
+            self.assertIsNot(read_threads[0], loop_thread["thread"])
+
+        # Static guard: no direct blocking file calls left in the async step
+        source = inspect.getsource(config_flow_module.WineInventoryOptionsFlowHandler)
+        tree = ast.parse(textwrap.dedent(source))
+        step = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.AsyncFunctionDef) and n.name == "async_step_upload_vivino"
+        )
+        direct_calls = [
+            n.func.attr
+            for n in ast.walk(step)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and n.func.attr in {"read_text", "read_bytes", "is_file", "exists", "open"}
+        ]
+        self.assertEqual(direct_calls, [])
 
     def test_v040_vivino_export_zip_import(self) -> None:
         """v0.4.0: Verify Vivino ZIP archive import parses full_wine_list.csv as Tasted, cellar.csv into cellar stock, and downloads covers."""

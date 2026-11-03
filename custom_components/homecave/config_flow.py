@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 from pathlib import Path
 from typing import Any
@@ -419,7 +420,8 @@ class WineInventoryOptionsFlowHandler(config_entries.OptionsFlow):
                         safe_path = await self.hass.async_add_executor_job(
                             resolve_safe_storage_path, config_dir, file_path
                         )
-                        if safe_path.is_file():
+                        is_file = await self.hass.async_add_executor_job(safe_path.is_file)
+                        if is_file:
                             if safe_path.suffix.lower() == ".zip":
                                 res = await coordinator.async_import_vivino_zip(safe_path)
                                 _LOGGER.info(
@@ -430,7 +432,10 @@ class WineInventoryOptionsFlowHandler(config_entries.OptionsFlow):
                                 return self.async_create_entry(
                                     title="", data=self._entry_options_dict()
                                 )
-                            csv_content = safe_path.read_text(encoding="utf-8")
+                            # File I/O must not run on the event loop (large CSVs would block HA)
+                            csv_content = await self.hass.async_add_executor_job(
+                                functools.partial(safe_path.read_text, encoding="utf-8")
+                            )
                     except Exception as err:  # noqa: BLE001
                         _LOGGER.warning("Could not read file_path %s: %s", file_path, err)
                 if csv_content:

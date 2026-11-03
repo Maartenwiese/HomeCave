@@ -68,7 +68,7 @@ class TestStaticAntiMockingAndSchemas(unittest.TestCase):
         manifest = json.loads(manifest_text)
         self.assertEqual(manifest["domain"], "homecave")
         self.assertEqual(manifest["name"], "HomeCave")
-        self.assertEqual(manifest["version"], "0.9.3")
+        self.assertEqual(manifest["version"], "0.9.4")
         self.assertTrue(manifest["config_flow"])
         self.assertEqual(
             manifest["documentation"],
