@@ -265,8 +265,11 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         asset_view = WineInventoryMobileAssetView(self.hass)
         for fname, mime in (
             ("index.html", "text/html"),
+            ("index2.html", "text/html"),
             ("app.js", "application/javascript"),
+            ("app2.js", "application/javascript"),
             ("styles.css", "text/css"),
+            ("styles2.css", "text/css"),
             ("sw.js", "application/javascript"),
             ("manifest.webmanifest", "application/manifest+json"),
             ("icon-192.png", "image/png"),
@@ -632,6 +635,7 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
             or '"version": "0.9.4"' in manifest_json
             or '"version": "0.9.5"' in manifest_json
             or '"version": "0.9.6"' in manifest_json
+            or '"version": "0.9.7"' in manifest_json
         )
         self.assertTrue(
             "v0.3.9" in app_js
@@ -650,6 +654,7 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
             or "v0.9.4" in app_js
             or "v0.9.5" in app_js
             or "v0.9.6" in app_js
+            or "v0.9.7" in app_js
         )
 
         # 2. Font scale defaults to 1.15 (Large)

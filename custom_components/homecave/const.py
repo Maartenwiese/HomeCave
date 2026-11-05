@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "homecave"
 NAME: Final = "HomeCave"
-VERSION: Final = "0.9.6"
+VERSION: Final = "0.9.7"
 
 # Config & Options keys
 CONF_CELLAR_NAME: Final = "cellar_name"
