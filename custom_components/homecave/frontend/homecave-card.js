@@ -2,6 +2,7 @@
  * HomeCave — Local Wine Cellar, AI Label Scanner & SommAI Lovelace Cards (`custom:homecave-card`, v0.9.6)
  * Built using native Home Assistant Web Components (<ha-card>, <ha-icon>) and HA CSS variables.
  */
+import "./sommai-a2ui.js?v=0.9.8";
 
 const WINE_TYPE_LABELS = {
   red: "Red",
@@ -5288,6 +5289,11 @@ class WineSommAICard extends HTMLElement {
           --somm-border: var(--divider-color, rgba(0, 0, 0, 0.12));
           --somm-text: var(--primary-text-color, #202124);
           --somm-muted: var(--secondary-text-color, #5f6368);
+          --brand: var(--somm-brand);
+          --surface: var(--somm-surface);
+          --border: var(--somm-border);
+          --text: var(--somm-text);
+          --text-muted: var(--somm-muted);
         }
         ha-card {
           padding: 16px;
@@ -5518,6 +5524,7 @@ class WineSommAICard extends HTMLElement {
           color: var(--somm-muted);
           font-size: 13px;
         }
+        ${window.HomeCaveSommAIA2UI ? window.HomeCaveSommAIA2UI.getStyles() : ""}
       </style>
 
       <ha-card>
@@ -5597,6 +5604,19 @@ class WineSommAICard extends HTMLElement {
       `;
     }
     const recs = m.recommended_wines || [];
+    const a2uiHtml =
+      window.HomeCaveSommAIA2UI && Array.isArray(m.a2ui_blocks) && m.a2ui_blocks.length > 0
+        ? window.HomeCaveSommAIA2UI.renderBlocks(m.a2ui_blocks)
+        : "";
+    if (a2uiHtml) {
+      return `
+        <div class="msg msg-bot">
+          <div class="bubble">
+            ${a2uiHtml}
+          </div>
+        </div>
+      `;
+    }
     return `
       <div class="msg msg-bot">
         <div class="bubble">
@@ -5645,6 +5665,12 @@ class WineSommAICard extends HTMLElement {
     s.querySelectorAll(".chip[data-dish]").forEach((btn) => {
       btn.addEventListener("click", () => {
         this._sendMessage(btn.dataset.dish);
+      });
+    });
+
+    s.querySelectorAll("[data-a2ui-prompt]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (btn.dataset.a2uiPrompt) this._sendMessage(btn.dataset.a2uiPrompt);
       });
     });
 
@@ -5722,6 +5748,7 @@ class WineSommAICard extends HTMLElement {
         dish_analysis: p.dish_analysis,
         pairing_reasoning: p.pairing_reasoning,
         recommended_wines: p.recommended_wines || [],
+        a2ui_blocks: Array.isArray(p.a2ui_blocks) ? p.a2ui_blocks : [],
         conversational_response: p.conversational_response,
       });
     } catch (err) {

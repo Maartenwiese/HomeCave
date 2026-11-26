@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "homecave"
 NAME: Final = "HomeCave"
-VERSION: Final = "0.9.7"
+VERSION: Final = "0.9.8"
 
 # Config & Options keys
 CONF_CELLAR_NAME: Final = "cellar_name"
@@ -54,7 +54,9 @@ LEGACY_BACKUPS_SUBDIR: Final = "www/homecave/backups"
 FRONTEND_URL_BASE: Final = "/homecave_frontend"
 MOBILE_APP_URL_BASE: Final = "/homecave"
 CARD_JS_FILENAME: Final = "homecave-card.js"
+SOMMAI_A2UI_JS_FILENAME: Final = "sommai-a2ui.js"
 CARD_RESOURCE_URL: Final = f"{FRONTEND_URL_BASE}/{CARD_JS_FILENAME}?v={VERSION}"
+SOMMAI_A2UI_RESOURCE_URL: Final = f"{FRONTEND_URL_BASE}/{SOMMAI_A2UI_JS_FILENAME}?v={VERSION}"
 
 # Security & Rate Limits
 MAX_BACKUP_ARCHIVE_BYTES: Final = 50 * 1024 * 1024  # 50 MB max ZIP backup/import size

@@ -2164,6 +2164,19 @@ class HomeCaveMobileApp {
     }
 
     const recs = m.recommended_wines || [];
+    const a2uiHtml =
+      window.HomeCaveSommAIA2UI && Array.isArray(m.a2ui_blocks) && m.a2ui_blocks.length > 0
+        ? window.HomeCaveSommAIA2UI.renderBlocks(m.a2ui_blocks)
+        : "";
+    if (a2uiHtml) {
+      return `
+        <div class="sommai-msg sommai-msg-bot">
+          <div class="sommai-msg-bubble sommai-a2ui-bubble">
+            ${a2uiHtml}
+          </div>
+        </div>
+      `;
+    }
     return `
       <div class="sommai-msg sommai-msg-bot">
         <div class="sommai-msg-bubble">
@@ -3420,6 +3433,13 @@ class HomeCaveMobileApp {
       });
     });
 
+    r.querySelectorAll("[data-a2ui-prompt]").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const prompt = chip.dataset.a2uiPrompt;
+        if (prompt) this._sendSommAiMessage(prompt);
+      });
+    });
+
     r.querySelector("#btn-sommai-pick-photo")?.addEventListener("click", () => {
       r.querySelector("#sommai-dish-file")?.click();
     });
@@ -3700,6 +3720,7 @@ class HomeCaveMobileApp {
         dish_analysis: p.dish_analysis,
         pairing_reasoning: p.pairing_reasoning,
         recommended_wines: p.recommended_wines || [],
+        a2ui_blocks: Array.isArray(p.a2ui_blocks) ? p.a2ui_blocks : [],
         conversational_response: p.conversational_response,
         timestamp: new Date().toISOString(),
       });

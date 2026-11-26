@@ -120,15 +120,242 @@ def _clean_pairing_text(value: Any) -> str:
     return str(value if value is not None else "")[:MAX_PAIRING_TEXT_CHARS]
 
 
-def validate_sommelier_pairing(pairing: Any, in_stock_ids: set[int]) -> dict[str, Any]:
-    """Coerce/validate untrusted LLM pairing JSON before it reaches any client.
+ALLOWED_A2UI_BLOCK_TYPES = frozenset(
+    {
+        "header",
+        "callout",
+        "bottle_card",
+        "comparison_table",
+        "taste_match",
+        "serving_guide",
+        "follow_up_chips",
+    }
+)
+ALLOWED_CALLOUT_TONES = frozenset({"info", "pairing", "warning"})
+
+
+def _clamp_int(value: Any, lo: int, hi: int, default: int = 0) -> int:
+    """Coerce value to int and clamp to [lo, hi]."""
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, parsed))
+
+
+def _hydrate_wine_fields(wine: dict[str, Any] | None) -> dict[str, Any]:
+    """Extract trusted cellar fields for A2UI bottle cards from SQLite row."""
+    if not isinstance(wine, dict):
+        return {}
+    winery = str(wine.get("winery") or "").strip()
+    name = str(wine.get("name") or "").strip()
+    vintage = wine.get("vintage")
+    title = f"{winery} – {name}".strip(" –")
+    if vintage:
+        title = f"{title} ({vintage})" if title else str(vintage)
+    return {
+        "wine_title": title[:300],
+        "winery": winery[:150],
+        "wine_name": name[:150],
+        "vintage": int(vintage) if str(vintage or "").isdigit() else None,
+        "wine_type": str(wine.get("wine_type") or "")[:40],
+        "varietal": str(wine.get("varietal") or "")[:120],
+        "region": str(wine.get("region") or "")[:120],
+        "country": str(wine.get("country") or "")[:80],
+        "quantity": int(wine.get("quantity") or 0),
+        "storage_location": str(
+            (wine.get("active_storage_locations") or [None])[0]
+            or wine.get("storage_location")
+            or ""
+        )[:120],
+        "drink_status": str(wine.get("drink_status") or "unknown")[:40],
+        "vivino_rating": (
+            float(wine["vivino_rating"])
+            if wine.get("vivino_rating") not in (None, "")
+            else None
+        ),
+        "image_url": str(wine.get("image_url") or "")[:500],
+    }
+
+
+def _validate_a2ui_blocks(
+    raw_blocks: Any,
+    in_stock_ids: set[int],
+    wines_by_id: dict[int, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Validate, sanitize, and DB-hydrate untrusted LLM A2UI blocks."""
+    if not isinstance(raw_blocks, list):
+        return []
+
+    clean_blocks: list[dict[str, Any]] = []
+    for block in raw_blocks[:10]:
+        if not isinstance(block, dict):
+            continue
+        btype = str(block.get("type") or "").strip().lower()
+        if btype not in ALLOWED_A2UI_BLOCK_TYPES:
+            continue
+
+        if btype == "header":
+            title = _clean_pairing_text(block.get("title"))[:200]
+            subtitle = _clean_pairing_text(block.get("subtitle"))[:300]
+            badge = _clean_pairing_text(block.get("badge"))[:60]
+            if title:
+                clean_blocks.append(
+                    {"type": "header", "title": title, "subtitle": subtitle, "badge": badge}
+                )
+
+        elif btype == "callout":
+            tone = str(block.get("tone") or "pairing").strip().lower()
+            if tone not in ALLOWED_CALLOUT_TONES:
+                tone = "info"
+            title = _clean_pairing_text(block.get("title"))[:160]
+            body = _clean_pairing_text(block.get("body"))
+            if body or title:
+                clean_blocks.append(
+                    {"type": "callout", "tone": tone, "title": title, "body": body}
+                )
+
+        elif btype == "bottle_card":
+            try:
+                wid: int | None = int(block.get("wine_id"))
+            except (TypeError, ValueError):
+                wid = None
+            if wid is not None and wid not in in_stock_ids:
+                wid = None
+            hydrated = _hydrate_wine_fields(wines_by_id.get(wid) if wid is not None else None)
+            title = hydrated.get("wine_title") or _clean_pairing_text(block.get("wine_title"))[:300]
+            if not title and wid is None:
+                continue
+            clean_blocks.append(
+                {
+                    "type": "bottle_card",
+                    "wine_id": wid,
+                    "wine_title": title,
+                    "match_type": _clean_pairing_text(block.get("match_type") or "Cellar Pick")[:60],
+                    "reason": _clean_pairing_text(block.get("reason") or block.get("body")),
+                    "serving_temp_c": _clean_pairing_text(block.get("serving_temp_c"))[:40],
+                    "decant_minutes": _clamp_int(block.get("decant_minutes"), 0, MAX_DECANT_MINUTES, 0),
+                    **{k: v for k, v in hydrated.items() if k != "wine_title"},
+                }
+            )
+
+        elif btype == "comparison_table":
+            raw_cols = block.get("columns")
+            raw_rows = block.get("rows")
+            if not isinstance(raw_cols, list) or not isinstance(raw_rows, list):
+                continue
+            cols = [_clean_pairing_text(c)[:80] for c in raw_cols[:4] if _clean_pairing_text(c)]
+            if len(cols) < 2:
+                continue
+            rows_out: list[dict[str, Any]] = []
+            for row in raw_rows[:8]:
+                if not isinstance(row, dict):
+                    continue
+                label = _clean_pairing_text(row.get("label"))[:100]
+                vals_in = row.get("values")
+                if not label or not isinstance(vals_in, list):
+                    continue
+                vals = [_clean_pairing_text(v)[:200] for v in vals_in[: len(cols)]]
+                while len(vals) < len(cols):
+                    vals.append("—")
+                rows_out.append({"label": label, "values": vals})
+            if rows_out:
+                clean_blocks.append(
+                    {
+                        "type": "comparison_table",
+                        "title": _clean_pairing_text(block.get("title"))[:160],
+                        "columns": cols,
+                        "rows": rows_out,
+                    }
+                )
+
+        elif btype == "taste_match":
+            raw_metrics = block.get("metrics")
+            if not isinstance(raw_metrics, list):
+                continue
+            metrics_out: list[dict[str, Any]] = []
+            for m in raw_metrics[:6]:
+                if not isinstance(m, dict):
+                    continue
+                label = _clean_pairing_text(m.get("label"))[:60]
+                if not label:
+                    continue
+                metrics_out.append(
+                    {
+                        "label": label,
+                        "dish_level": _clamp_int(m.get("dish_level"), 0, 100, 50),
+                        "wine_level": _clamp_int(m.get("wine_level"), 0, 100, 50),
+                        "note": _clean_pairing_text(m.get("note"))[:140],
+                    }
+                )
+            if metrics_out:
+                clean_blocks.append(
+                    {
+                        "type": "taste_match",
+                        "title": _clean_pairing_text(block.get("title") or "Structural Taste Match")[:160],
+                        "metrics": metrics_out,
+                    }
+                )
+
+        elif btype == "serving_guide":
+            try:
+                wid = int(block.get("wine_id"))
+            except (TypeError, ValueError):
+                wid = None
+            if wid is not None and wid not in in_stock_ids:
+                wid = None
+            hydrated = _hydrate_wine_fields(wines_by_id.get(wid) if wid is not None else None)
+            steps_in = block.get("steps")
+            steps_out = (
+                [_clean_pairing_text(s)[:240] for s in steps_in[:5] if _clean_pairing_text(s)]
+                if isinstance(steps_in, list)
+                else []
+            )
+            clean_blocks.append(
+                {
+                    "type": "serving_guide",
+                    "wine_id": wid,
+                    "wine_title": hydrated.get("wine_title") or _clean_pairing_text(block.get("wine_title"))[:300],
+                    "serving_temp_c": _clean_pairing_text(block.get("serving_temp_c"))[:40],
+                    "decant_minutes": _clamp_int(block.get("decant_minutes"), 0, MAX_DECANT_MINUTES, 0),
+                    "glassware": _clean_pairing_text(block.get("glassware"))[:100],
+                    "steps": steps_out,
+                }
+            )
+
+        elif btype == "follow_up_chips":
+            chips_in = block.get("chips")
+            if not isinstance(chips_in, list):
+                continue
+            chips_out: list[dict[str, str]] = []
+            for ch in chips_in[:4]:
+                if not isinstance(ch, dict):
+                    continue
+                label = _clean_pairing_text(ch.get("label"))[:60]
+                prompt = _clean_pairing_text(ch.get("prompt"))[:300]
+                if label and prompt:
+                    chips_out.append({"label": label, "prompt": prompt})
+            if chips_out:
+                clean_blocks.append({"type": "follow_up_chips", "chips": chips_out})
+
+    return clean_blocks
+
+
+def validate_sommelier_pairing(
+    pairing: Any,
+    in_stock_ids: set[int],
+    wines_by_id: dict[int, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Coerce/validate untrusted LLM pairing JSON & A2UI blocks before reaching any client.
 
     - ``wine_id`` must be an int that refers to a wine currently in stock (else ``None``).
     - ``decant_minutes`` is clamped to an int in [0, MAX_DECANT_MINUTES].
+    - ``a2ui_blocks`` is strictly allowlist-filtered and DB-hydrated from ``wines_by_id``.
     - All text fields are forced to strings and truncated.
     """
     if not isinstance(pairing, dict):
         pairing = {}
+    wines_lookup = wines_by_id or {}
     clean: dict[str, Any] = {
         key: _clean_pairing_text(pairing.get(key))
         for key in ("dish_name", "dish_analysis", "pairing_reasoning", "conversational_response")
@@ -145,10 +372,7 @@ def validate_sommelier_pairing(pairing: Any, in_stock_ids: set[int]) -> dict[str
                 wine_id = None
             if wine_id is not None and wine_id not in in_stock_ids:
                 wine_id = None
-            try:
-                decant = int(float(rec.get("decant_minutes") or 0))
-            except (TypeError, ValueError):
-                decant = 0
+            decant = _clamp_int(rec.get("decant_minutes"), 0, MAX_DECANT_MINUTES, 0)
             recs_out.append(
                 {
                     "wine_id": wine_id,
@@ -156,10 +380,39 @@ def validate_sommelier_pairing(pairing: Any, in_stock_ids: set[int]) -> dict[str
                     "match_type": _clean_pairing_text(rec.get("match_type"))[:60],
                     "sommelier_notes": _clean_pairing_text(rec.get("sommelier_notes")),
                     "serving_temp_c": _clean_pairing_text(rec.get("serving_temp_c"))[:40],
-                    "decant_minutes": max(0, min(MAX_DECANT_MINUTES, decant)),
+                    "decant_minutes": decant,
                 }
             )
     clean["recommended_wines"] = recs_out
+
+    a2ui_blocks = _validate_a2ui_blocks(pairing.get("a2ui_blocks"), in_stock_ids, wines_lookup)
+    if not a2ui_blocks:
+        if clean["conversational_response"]:
+            a2ui_blocks.append(
+                {
+                    "type": "callout",
+                    "tone": "pairing",
+                    "title": clean["dish_name"] or "Sommelier Advice",
+                    "body": clean["conversational_response"],
+                }
+            )
+        for rec in recs_out:
+            hydrated = _hydrate_wine_fields(
+                wines_lookup.get(rec["wine_id"]) if rec["wine_id"] is not None else None
+            )
+            a2ui_blocks.append(
+                {
+                    "type": "bottle_card",
+                    "wine_id": rec["wine_id"],
+                    "wine_title": hydrated.get("wine_title") or rec["wine_title"],
+                    "match_type": rec["match_type"] or "Cellar Pick",
+                    "reason": rec["sommelier_notes"],
+                    "serving_temp_c": rec["serving_temp_c"],
+                    "decant_minutes": rec["decant_minutes"],
+                    **{k: v for k, v in hydrated.items() if k != "wine_title"},
+                }
+            )
+    clean["a2ui_blocks"] = a2ui_blocks
     return clean
 
 
@@ -1044,12 +1297,15 @@ class WineInventoryCoordinator:
             model=self.active_llm_model,
             provider=self.llm_provider,
         )
-        in_stock_ids = {
-            int(w["id"])
+        wines_by_id = {
+            int(w["id"]): w
             for w in cellar_wines
             if w.get("id") is not None and int(w.get("quantity") or 0) > 0
         }
-        pairing = validate_sommelier_pairing(result.get("pairing") or {}, in_stock_ids)
+        in_stock_ids = set(wines_by_id.keys())
+        pairing = validate_sommelier_pairing(
+            result.get("pairing") or {}, in_stock_ids, wines_by_id=wines_by_id
+        )
         return {
             "status": "ok",
             "pairing": pairing,

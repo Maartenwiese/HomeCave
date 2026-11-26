@@ -31,6 +31,7 @@ except ImportError:  # pragma: no cover - allows importing package in standalone
     PLATFORMS = ["sensor", "event"]  # type: ignore[assignment]
 
 from .const import (
+    SOMMAI_A2UI_JS_FILENAME,
     CARD_JS_FILENAME,
     CARD_RESOURCE_URL,
     DOMAIN,
@@ -128,6 +129,7 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     domain_meta = hass.data.setdefault(DOMAIN, {})
     frontend_dir = Path(__file__).parent / "frontend"
     card_js_path = frontend_dir / CARD_JS_FILENAME
+    sommai_a2ui_js_path = frontend_dir / SOMMAI_A2UI_JS_FILENAME
     mobile_dir = frontend_dir / "mobile"
 
     if not domain_meta.get("_frontend_registered"):
@@ -139,7 +141,12 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
                             f"{FRONTEND_URL_BASE}/{CARD_JS_FILENAME}",
                             str(card_js_path),
                             cache_headers=True,
-                        )
+                        ),
+                        StaticPathConfig(
+                            f"{FRONTEND_URL_BASE}/{SOMMAI_A2UI_JS_FILENAME}",
+                            str(sommai_a2ui_js_path),
+                            cache_headers=True,
+                        ),
                     ]
                 )
             except Exception as err:  # noqa: BLE001
